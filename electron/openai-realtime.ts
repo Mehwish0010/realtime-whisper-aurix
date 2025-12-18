@@ -41,7 +41,7 @@ class RealtimeSession extends EventEmitter {
         })
 
         this.ws.on('open', () => {
-          console.log('✅ Connected to OpenAI Realtime API')
+          console.log('Connected to OpenAI Realtime API')
           this.isConnected = true
 
           // Configure session for transcription
@@ -100,24 +100,24 @@ class RealtimeSession extends EventEmitter {
   }
 
   private handleServerEvent(event: any) {
-    console.log('📨 Received event:', event.type)
+    console.log('Received event:', event.type)
 
     switch (event.type) {
       case 'session.created':
         this.sessionId = event.session.id
-        console.log('✅ Session created:', this.sessionId)
+        console.log('Session created:', this.sessionId)
         this.emit('session_created', event.session)
         break
 
       case 'session.updated':
-        console.log('✅ Session updated')
+        console.log('Session updated')
         this.emit('session_updated', event.session)
         break
 
       case 'conversation.item.input_audio_transcription.completed':
         const transcript = event.transcript || ''
         const transcriptionTime = this.speechStopTime ? Date.now() - this.speechStopTime : 0
-        console.log(`✅ Transcription completed in ${transcriptionTime}ms:`, transcript)
+        console.log(`Transcription completed in ${transcriptionTime}ms:`, transcript)
         if (transcript.trim()) {
           this.emit('transcription', transcript)
         }
@@ -126,52 +126,52 @@ class RealtimeSession extends EventEmitter {
         break
 
       case 'conversation.item.input_audio_transcription.failed':
-        console.error('❌ Transcription failed:', event.error)
+        console.error('Transcription failed:', event.error)
         this.emit('error', event.error)
         break
 
       case 'input_audio_buffer.speech_started':
         this.speechStartTime = Date.now()
-        console.log('🎤 Speech started (VAD detected) at', new Date().toLocaleTimeString())
+        console.log('Speech started (VAD detected) at', new Date().toLocaleTimeString())
         this.emit('speech_started')
         break
 
       case 'input_audio_buffer.speech_stopped':
         this.speechStopTime = Date.now()
         const speechDuration = this.speechStartTime ? this.speechStopTime - this.speechStartTime : 0
-        console.log(`⏸️  Speech stopped (VAD detected) - Duration: ${speechDuration}ms`)
+        console.log(`Speech stopped (VAD detected) - Duration: ${speechDuration}ms`)
         this.emit('speech_stopped')
         // Automatically commit audio and request transcription when speech stops
         this.commitAudio()
         break
 
       case 'input_audio_buffer.committed':
-        console.log('✅ Audio buffer committed')
+        console.log('Audio buffer committed')
         break
 
       case 'response.done':
-        console.log('✅ Response completed (ignored)')
+        console.log('Response completed (ignored)')
         // Don't emit anything - we only want transcriptions, not AI responses
         break
 
       case 'response.text.delta':
-        console.log('📝 Text delta (ignored):', event.delta)
+        console.log('Text delta (ignored):', event.delta)
         // Don't emit - we only want transcriptions
         break
 
       case 'response.text.done':
-        console.log('✅ Full text (ignored):', event.text)
+        console.log('Full text (ignored):', event.text)
         // Don't emit - we only want transcriptions from input audio
         break
 
       case 'error':
-        console.error('❌ Server error:', event.error)
+        console.error('Server error:', event.error)
         this.emit('error', event.error)
         break
 
       default:
         // Log ALL events for debugging
-        console.log('🔍 Other event:', event.type, JSON.stringify(event).substring(0, 200))
+        console.log('Other event:', event.type, JSON.stringify(event).substring(0, 200))
     }
   }
 

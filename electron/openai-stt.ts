@@ -58,7 +58,7 @@ export async function transcribeAudio(
     }
 
     if (stats.size < 1000) {
-      console.warn('⚠️ Warning: Audio file very small, transcription may be inaccurate')
+      console.warn('Warning: Audio file very small, transcription may be inaccurate')
     }
 
     // Create a read stream for the audio file
@@ -76,12 +76,12 @@ export async function transcribeAudio(
       temperature: 0.0
     })
 
-    console.log('✅ Transcription successful!')
+    console.log('Transcription successful!')
     console.log('Transcription text:', transcription)
     console.log('Transcription length:', transcription.length, 'characters')
 
     if (transcription.length < 5) {
-      console.warn('⚠️ Warning: Transcription is very short, may not have captured full speech')
+      console.warn('Warning: Transcription is very short, may not have captured full speech')
     }
 
     return transcription || 'No speech detected'

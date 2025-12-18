@@ -33,13 +33,13 @@ function App() {
 
     // Create handler functions
     const handleTranscription = (text: string) => {
-      console.log('📝 Received transcription:', text)
+      console.log('Received transcription:', text)
 
       // Calculate latency
       if (speechStopTimeRef.current) {
         const latency = Date.now() - speechStopTimeRef.current
         setLastLatency(latency)
-        console.log(`⏱️ Total latency from speech stop to transcription: ${latency}ms`)
+        console.log(`Total latency from speech stop to transcription: ${latency}ms`)
       }
 
       setTranscription(prev => {
@@ -50,18 +50,18 @@ function App() {
     }
 
     const handleSpeechStarted = () => {
-      console.log('🎤 Speech detected')
+      console.log('Speech detected')
       setIsSpeaking(true)
     }
 
     const handleSpeechStopped = () => {
-      console.log('⏸️  Speech ended')
+      console.log('Speech ended')
       setIsSpeaking(false)
       speechStopTimeRef.current = Date.now()
     }
 
     const handleError = (error: string) => {
-      console.error('❌ Realtime error:', error)
+      console.error('Realtime error:', error)
       setStatus(`Error: ${error}`)
     }
 
@@ -86,9 +86,9 @@ function App() {
       setOpenaiStatus(result)
 
       if (result.initialized) {
-        setStatus('✅ Ready for live transcription with OpenAI')
+        setStatus('Ready for live transcription with OpenAI')
       } else {
-        setStatus('⚠️ OpenAI API key not configured')
+        setStatus('OpenAI API key not configured')
       }
     } catch (error) {
       console.error('Failed to check OpenAI status:', error)
@@ -120,17 +120,17 @@ function App() {
         throw new Error(result.error || 'Failed to start realtime session')
       }
 
-      console.log('✅ Realtime session started')
+      console.log('Realtime session started')
 
       // IMPORTANT: Wait 2 seconds for session to be fully ready
-      console.log('⏳ Waiting for session to stabilize...')
-      setStatus('⏳ Preparing microphone...')
+      console.log('Waiting for session to stabilize...')
+      setStatus('Preparing microphone...')
       await new Promise(resolve => setTimeout(resolve, 2000))
 
-      setStatus('🎤 Live transcription active - Speak now!')
+      setStatus('Live transcription active - Speak now!')
 
       // Request microphone access
-      console.log('🎤 Requesting microphone access...')
+      console.log('Requesting microphone access...')
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -141,12 +141,12 @@ function App() {
         }
       })
 
-      console.log('✅ Microphone stream obtained:', stream)
+      console.log('Microphone stream obtained:', stream)
       console.log('Audio tracks:', stream.getAudioTracks())
       streamRef.current = stream
 
       // Create audio context for processing
-      console.log('🔊 Creating AudioContext...')
+      console.log('Creating AudioContext...')
       const audioContext = new AudioContext({ sampleRate: 24000 })
       audioContextRef.current = audioContext
       console.log('AudioContext state:', audioContext.state)
@@ -158,15 +158,15 @@ function App() {
       }
 
       const source = audioContext.createMediaStreamSource(stream)
-      console.log('✅ MediaStreamSource created')
+      console.log('MediaStreamSource created')
 
       // Use ScriptProcessorNode temporarily for debugging
       // (Will replace with AudioWorklet once we verify mic works)
-      console.log('🔧 Creating ScriptProcessorNode (temporary for debugging)...')
+      console.log('Creating ScriptProcessorNode (temporary for debugging)...')
       const bufferSize = 4096
       const processor = audioContext.createScriptProcessor(bufferSize, 1, 1)
       processorRef.current = processor as any
-      console.log('✅ ScriptProcessorNode created')
+      console.log('ScriptProcessorNode created')
 
       let frameCount = 0
       processor.onaudioprocess = async (e) => {
@@ -181,7 +181,7 @@ function App() {
 
         // Log every 30 frames (~1 second at 4096 buffer)
         if (frameCount++ % 30 === 0) {
-          console.log('📊 Audio level:', rms.toFixed(4))
+          console.log('Audio level:', rms.toFixed(4))
         }
 
         // Update audio level for visualization
@@ -202,15 +202,15 @@ function App() {
         }
       }
 
-      console.log('🔗 Connecting audio nodes...')
+      console.log('Connecting audio nodes...')
       source.connect(processor)
       processor.connect(audioContext.destination)
-      console.log('✅ Audio pipeline connected')
+      console.log('Audio pipeline connected')
 
       setIsRecording(true)
       setTranscription('')
 
-      console.log('🎙️ Microphone connected, streaming audio...')
+      console.log('Microphone connected, streaming audio...')
     } catch (error) {
       console.error('Recording error:', error)
       setStatus(`Error: ${(error as Error).message}`)
@@ -254,9 +254,9 @@ function App() {
       setIsRecording(false)
       setIsSpeaking(false)
       setAudioLevel(0)
-      setStatus('✅ Live transcription stopped')
+      setStatus('Live transcription stopped')
 
-      console.log('✅ Stopped successfully')
+      console.log('Stopped successfully')
     } catch (error) {
       console.error('Stop error:', error)
       setStatus(`Error stopping: ${(error as Error).message}`)
@@ -267,7 +267,7 @@ function App() {
     <div className="app">
       <header className="app-header">
         <h1>AURIX Voice Assistant</h1>
-        <p className="subtitle">🎙️ OpenAI Realtime - Live Transcription</p>
+        <p className="subtitle">OpenAI Realtime - Live Transcription</p>
         {openaiStatus && (
           <p className="api-status" style={{
             color: openaiStatus.initialized ? '#4CAF50' : '#ff9800',
@@ -336,7 +336,7 @@ function App() {
               transition: 'all 0.3s ease'
             }}>
               <span style={{ fontSize: '24px' }}>
-                {isSpeaking ? '🎤' : '⏸️'}
+                {isSpeaking ? '[MIC]' : '[IDLE]'}
               </span>
               <span style={{ fontWeight: 'bold', color: isSpeaking ? '#4CAF50' : '#666' }}>
                 {isSpeaking ? 'Listening...' : 'Waiting for speech...'}
@@ -351,7 +351,7 @@ function App() {
               border: '1px solid #ddd'
             }}>
               <div style={{ marginBottom: '8px', fontSize: '14px', fontWeight: 'bold' }}>
-                🎚️ Microphone Level: {(audioLevel * 100).toFixed(1)}%
+                Microphone Level: {(audioLevel * 100).toFixed(1)}%
               </div>
               <div style={{
                 width: '100%',
@@ -369,7 +369,7 @@ function App() {
                 }}></div>
               </div>
               <div style={{ marginTop: '5px', fontSize: '12px', color: '#666' }}>
-                {audioLevel < 0.01 ? '⚠️ No audio detected - check microphone' : audioLevel < 0.05 ? '⚠️ Audio very low' : '✅ Good audio level'}
+                {audioLevel < 0.01 ? 'No audio detected - check microphone' : audioLevel < 0.05 ? 'Audio very low' : 'Good audio level'}
               </div>
             </div>
 
@@ -383,7 +383,7 @@ function App() {
                 fontSize: '13px',
                 color: '#0d47a1'
               }}>
-                ⏱️ <strong>Last transcription latency:</strong> {lastLatency}ms
+                <strong>Last transcription latency:</strong> {lastLatency}ms
                 <span style={{ marginLeft: '10px', fontSize: '11px', color: '#666' }}>
                   ({(lastLatency / 1000).toFixed(2)}s after you stopped speaking)
                 </span>
@@ -436,7 +436,7 @@ function App() {
             borderRadius: '8px',
             color: '#856404'
           }}>
-            <strong>⚠️ Setup Required:</strong>
+            <strong>Setup Required:</strong>
             <p>Please add your OpenAI API key to the .env file:</p>
             <code style={{
               display: 'block',
@@ -467,7 +467,7 @@ function App() {
             color: '#0d47a1',
             fontSize: '14px'
           }}>
-            <strong>💡 How it works:</strong>
+            <strong>How it works:</strong>
             <ul style={{ marginTop: '10px', marginBottom: 0, paddingLeft: '20px' }}>
               <li>Transcription appears in real-time as you speak</li>
               <li>Green indicator shows when speech is detected</li>

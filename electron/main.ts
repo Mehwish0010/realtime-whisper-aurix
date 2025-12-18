@@ -83,14 +83,14 @@ app.whenReady().then(() => {
   const apiKey = process.env.OPENAI_API_KEY
 
   if (!apiKey || apiKey === 'your-api-key-here') {
-    console.error('⚠️  WARNING: OPENAI_API_KEY not set in .env file')
-    console.error('⚠️  Please add your OpenAI API key to the .env file')
+    console.error('WARNING: OPENAI_API_KEY not set in .env file')
+    console.error('Please add your OpenAI API key to the .env file')
   } else {
     try {
       initializeOpenAI(apiKey)
-      console.log('✅ OpenAI initialized successfully')
+      console.log('OpenAI initialized successfully')
     } catch (error) {
-      console.error('❌ Failed to initialize OpenAI:', error)
+      console.error('Failed to initialize OpenAI:', error)
     }
   }
 
@@ -244,28 +244,28 @@ ipcMain.handle('realtime-start', async () => {
 
     // Set up event listeners
     session.on('transcription', (text: string) => {
-      console.log('📝 Realtime transcription:', text)
+      console.log('Realtime transcription:', text)
       if (mainWindow) {
         mainWindow.webContents.send('realtime-transcription', text)
       }
     })
 
     session.on('speech_started', () => {
-      console.log('🎤 Speech started')
+      console.log('Speech started')
       if (mainWindow) {
         mainWindow.webContents.send('realtime-speech-started')
       }
     })
 
     session.on('speech_stopped', () => {
-      console.log('⏸️  Speech stopped')
+      console.log('Speech stopped')
       if (mainWindow) {
         mainWindow.webContents.send('realtime-speech-stopped')
       }
     })
 
     session.on('error', (error: any) => {
-      console.error('❌ Realtime error:', error)
+      console.error('Realtime error:', error)
       if (mainWindow) {
         mainWindow.webContents.send('realtime-error', error.message || 'Unknown error')
       }
@@ -362,4 +362,4 @@ ipcMain.handle('realtime-status', async () => {
   }
 })
 
-console.log('✅ AURIX Voice Assistant - OpenAI STT Integration Ready')
+console.log('AURIX Voice Assistant - OpenAI STT Integration Ready')
