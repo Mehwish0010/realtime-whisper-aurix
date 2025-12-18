@@ -27,5 +27,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onRealtimeError: (callback: (error: string) => void) => {
     ipcRenderer.on('realtime-error', (_event: any, error: string) => callback(error))
+  },
+
+  // TTS methods
+  ttsSynthesize: (text: string, options?: any) => ipcRenderer.invoke('tts-synthesize', text, options),
+  ttsStatus: () => ipcRenderer.invoke('tts-status'),
+
+  // Chat methods
+  chatSendMessage: (message: string) => ipcRenderer.invoke('chat-send-message', message),
+  chatClearHistory: () => ipcRenderer.invoke('chat-clear-history'),
+  chatGetHistory: () => ipcRenderer.invoke('chat-get-history'),
+  chatSetSystemPrompt: (prompt: string) => ipcRenderer.invoke('chat-set-system-prompt', prompt),
+
+  // Conversation orchestrator methods
+  conversationStart: (options?: any) => ipcRenderer.invoke('conversation-start', options),
+  conversationStop: () => ipcRenderer.invoke('conversation-stop'),
+  conversationStatus: () => ipcRenderer.invoke('conversation-status'),
+
+  // Conversation event listeners
+  onUserSpoke: (callback: (text: string) => void) => {
+    ipcRenderer.on('conversation-user-spoke', (_event: any, text: string) => callback(text))
+  },
+  onAIResponse: (callback: (text: string) => void) => {
+    ipcRenderer.on('conversation-ai-response', (_event: any, text: string) => callback(text))
+  },
+  onAIAudio: (callback: (audioBuffer: ArrayBuffer) => void) => {
+    ipcRenderer.on('conversation-ai-audio', (_event: any, buffer: ArrayBuffer) => callback(buffer))
+  },
+  onConversationStateChanged: (callback: (state: string) => void) => {
+    ipcRenderer.on('conversation-state-changed', (_event: any, state: string) => callback(state))
+  },
+  onConversationError: (callback: (error: string) => void) => {
+    ipcRenderer.on('conversation-error', (_event: any, error: string) => callback(error))
   }
 })

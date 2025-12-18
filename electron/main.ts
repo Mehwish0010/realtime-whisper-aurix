@@ -5,6 +5,10 @@ import dotenv from 'dotenv'
 import fs from 'fs/promises'
 import { initializeOpenAI, transcribeAudio, isInitialized, getStatus } from './openai-stt.js'
 import { createRealtimeSession, getRealtimeSession, disconnectRealtime } from './openai-realtime.js'
+import { initializeInworld, synthesizeSpeech, isInitialized as isTTSInitialized, getStatus as getTTSStatus } from './inworld-tts.js'
+import { createConversationManager, getConversationManager } from './openai-chat.js'
+import { getConversationOrchestrator } from './conversation-manager.js'
+import OpenAI from 'openai'
 
 // Load environment variables
 dotenv.config()
@@ -39,7 +43,7 @@ function createWindow() {
           "style-src 'self' 'unsafe-inline'; " +
           "img-src 'self' data: https:; " +
           "media-src 'self' blob: mediastream:; " +
-          "connect-src 'self' https://api.openai.com wss://api.openai.com; " +
+          "connect-src 'self' https://api.openai.com wss://api.openai.com https://api.inworld.ai; " +
           "font-src 'self'; " +
           "worker-src 'self' blob:;"
         ]
@@ -82,6 +86,8 @@ app.whenReady().then(() => {
   // Initialize OpenAI first
   const apiKey = process.env.OPENAI_API_KEY
 
+  let openaiClient: OpenAI | null = null
+
   if (!apiKey || apiKey === 'your-api-key-here') {
     console.error('WARNING: OPENAI_API_KEY not set in .env file')
     console.error('Please add your OpenAI API key to the .env file')
@@ -89,8 +95,43 @@ app.whenReady().then(() => {
     try {
       initializeOpenAI(apiKey)
       console.log('OpenAI initialized successfully')
+
+      // Create OpenAI client for chat
+      openaiClient = new OpenAI({ apiKey })
+
+      // Initialize chat manager
+      createConversationManager(openaiClient, {
+        systemPrompt: 'You are a helpful voice assistant. Provide clear, concise, and friendly responses.',
+        model: 'gpt-4-turbo-preview',
+        temperature: 0.7,
+        maxTokens: 1000
+      })
+      console.log('Chat manager initialized successfully')
     } catch (error) {
       console.error('Failed to initialize OpenAI:', error)
+    }
+  }
+
+  // Initialize Inworld TTS
+  const inworldWorkspaceId = process.env.INWORLD_WORKSPACE_ID
+  const inworldApiKey = process.env.INWORLD_API_KEY
+  const inworldApiSecret = process.env.INWORLD_API_SECRET
+
+  if (!inworldWorkspaceId || !inworldApiKey || !inworldApiSecret) {
+    console.warn('WARNING: Inworld TTS credentials not set in .env file')
+    console.warn('Voice conversation features will not be available')
+  } else {
+    try {
+      initializeInworld({
+        workspaceId: inworldWorkspaceId,
+        apiKey: inworldApiKey,
+        apiSecret: inworldApiSecret,
+        defaultVoice: process.env.INWORLD_DEFAULT_VOICE,
+        defaultModel: (process.env.INWORLD_DEFAULT_MODEL as any) || 'inworld-tts-1'
+      })
+      console.log('Inworld TTS initialized successfully')
+    } catch (error) {
+      console.error('Failed to initialize Inworld TTS:', error)
     }
   }
 
@@ -359,6 +400,215 @@ ipcMain.handle('realtime-status', async () => {
   return {
     success: true,
     connected: session ? session.getConnectionStatus() : false
+  }
+})
+
+// TTS IPC Handlers
+
+ipcMain.handle('tts-synthesize', async (_event, text: string, options?: any) => {
+  try {
+    console.log('TTS synthesis requested for text length:', text.length)
+
+    if (!isTTSInitialized()) {
+      throw new Error('Inworld TTS not initialized. Please check your credentials in .env file.')
+    }
+
+    const audioBuffer = await synthesizeSpeech({ text, ...options })
+
+    return {
+      success: true,
+      audio: audioBuffer
+    }
+  } catch (error: any) {
+    console.error('TTS synthesis error:', error)
+    return {
+      success: false,
+      error: error.message || 'Unknown TTS error occurred'
+    }
+  }
+})
+
+ipcMain.handle('tts-status', async () => {
+  const status = getTTSStatus()
+  return {
+    success: true,
+    ...status
+  }
+})
+
+// Chat IPC Handlers
+
+ipcMain.handle('chat-send-message', async (_event, message: string) => {
+  try {
+    console.log('Chat message received:', message)
+
+    const chatManager = getConversationManager()
+
+    if (!chatManager.isInitialized()) {
+      throw new Error('Chat manager not initialized.')
+    }
+
+    const response = await chatManager.sendMessage(message)
+
+    return {
+      success: true,
+      response: response
+    }
+  } catch (error: any) {
+    console.error('Chat error:', error)
+    return {
+      success: false,
+      error: error.message || 'Unknown chat error occurred'
+    }
+  }
+})
+
+ipcMain.handle('chat-clear-history', async () => {
+  try {
+    const chatManager = getConversationManager()
+    chatManager.clearHistory()
+
+    return {
+      success: true
+    }
+  } catch (error: any) {
+    console.error('Clear history error:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+ipcMain.handle('chat-get-history', async () => {
+  try {
+    const chatManager = getConversationManager()
+    const history = chatManager.getHistory()
+
+    return {
+      success: true,
+      history: history
+    }
+  } catch (error: any) {
+    console.error('Get history error:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+ipcMain.handle('chat-set-system-prompt', async (_event, prompt: string) => {
+  try {
+    const chatManager = getConversationManager()
+    chatManager.setSystemPrompt(prompt)
+
+    return {
+      success: true
+    }
+  } catch (error: any) {
+    console.error('Set system prompt error:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+// Conversation Orchestrator IPC Handlers
+
+ipcMain.handle('conversation-start', async (_event, options?: any) => {
+  try {
+    console.log('Starting voice conversation with options:', options)
+
+    const orchestrator = getConversationOrchestrator()
+    const sttSession = getRealtimeSession()
+
+    if (!sttSession) {
+      throw new Error('Realtime STT session not started. Please start STT first.')
+    }
+
+    // Set up orchestrator event listeners to forward to renderer
+    orchestrator.on('user_spoke', (text: string) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-user-spoke', text)
+      }
+    })
+
+    orchestrator.on('ai_response', (text: string) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-ai-response', text)
+      }
+    })
+
+    orchestrator.on('ai_audio', (audioBuffer: Buffer) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-ai-audio', audioBuffer)
+      }
+    })
+
+    orchestrator.on('state_changed', (state: string) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-state-changed', state)
+      }
+    })
+
+    orchestrator.on('error', (error: Error) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-error', error.message)
+      }
+    })
+
+    await orchestrator.start(sttSession, options)
+
+    return {
+      success: true,
+      message: 'Voice conversation started'
+    }
+  } catch (error: any) {
+    console.error('Failed to start voice conversation:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+ipcMain.handle('conversation-stop', async () => {
+  try {
+    console.log('Stopping voice conversation...')
+    const orchestrator = getConversationOrchestrator()
+    orchestrator.stop()
+    orchestrator.removeAllListeners()
+
+    return {
+      success: true,
+      message: 'Voice conversation stopped'
+    }
+  } catch (error: any) {
+    console.error('Failed to stop voice conversation:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+ipcMain.handle('conversation-status', async () => {
+  try {
+    const orchestrator = getConversationOrchestrator()
+    const status = orchestrator.getStatus()
+
+    return {
+      success: true,
+      ...status
+    }
+  } catch (error: any) {
+    console.error('Get conversation status error:', error)
+    return {
+      success: false,
+      error: error.message
+    }
   }
 })
 
