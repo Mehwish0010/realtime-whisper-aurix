@@ -8,20 +8,32 @@ interface OpenAIStatus {
   apiKey: string | null
 }
 
-function App() {
-  const [isRecording, setIsRecording] = useState(false)
-  const [transcription, setTranscription] = useState('')
-  const [status, setStatus] = useState('Checking OpenAI status...')
-  const [openaiStatus, setOpenaiStatus] = useState<OpenAIStatus | null>(null)
-  const [isSpeaking, setIsSpeaking] = useState(false)
-  const [audioLevel, setAudioLevel] = useState(0)
-  const [lastLatency, setLastLatency] = useState<number | null>(null)
+interface ConversationMessage {
+  type: 'user' | 'ai'
+  text: string
+  timestamp: number
+}
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+type ConversationState = 'idle' | 'listening' | 'transcribing' | 'ai_thinking' | 'tts_generating' | 'ai_speaking'
+
+function App() {
+  const [, setIsRecording] = useState(false)
+  const [, setTranscription] = useState('')
+  const [, setStatus] = useState('Checking OpenAI status...')
+  const [openaiStatus, setOpenaiStatus] = useState<OpenAIStatus | null>(null)
+  const [, setIsSpeaking] = useState(false)
+  const [, setAudioLevel] = useState(0)
+  const [, setLastLatency] = useState<number | null>(null)
+  const [conversationActive, setConversationActive] = useState(false)
+  const [conversationState, setConversationState] = useState<ConversationState>('idle')
+  const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([])
+  const [isInitializing, setIsInitializing] = useState(false)
+
   const audioContextRef = useRef<AudioContext | null>(null)
   const processorRef = useRef<AudioWorkletNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const speechStopTimeRef = useRef<number | null>(null)
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null)
 
   // Check OpenAI status on mount
   useEffect(() => {
@@ -31,7 +43,7 @@ function App() {
     const electronAPI = (window as any).electronAPI
     if (!electronAPI) return
 
-    // Create handler functions
+    // Create handler functions for STT
     const handleTranscription = (text: string) => {
       console.log('Received transcription:', text)
 
@@ -65,11 +77,59 @@ function App() {
       setStatus(`Error: ${error}`)
     }
 
-    // Set up listeners
+    // Set up STT listeners
     electronAPI.onRealtimeTranscription(handleTranscription)
     electronAPI.onRealtimeSpeechStarted(handleSpeechStarted)
     electronAPI.onRealtimeSpeechStopped(handleSpeechStopped)
     electronAPI.onRealtimeError(handleError)
+
+    // Set up conversation event listeners
+    electronAPI.onUserSpoke((text: string) => {
+      console.log('User spoke:', text)
+      setConversationHistory(prev => [...prev, { type: 'user', text, timestamp: Date.now() }])
+    })
+
+    electronAPI.onAIResponse((text: string) => {
+      console.log('AI response:', text)
+      setConversationHistory(prev => [...prev, { type: 'ai', text, timestamp: Date.now() }])
+    })
+
+    electronAPI.onAIAudio((audioBuffer: ArrayBuffer) => {
+      console.log('AI audio received, size:', audioBuffer.byteLength)
+      playAIAudio(audioBuffer)
+    })
+
+    electronAPI.onConversationStateChanged((state: string) => {
+      console.log('Conversation state changed:', state)
+      setConversationState(state as ConversationState)
+    })
+
+    electronAPI.onConversationError((error: string) => {
+      console.error('Conversation error:', error)
+      setStatus(`Conversation error: ${error}`)
+    })
+
+    electronAPI.onConversationStopped(() => {
+      console.log('Conversation ended')
+      setConversationActive(false)
+      setConversationState('idle')
+      setIsRecording(false)
+      setIsSpeaking(false)
+      setStatus('Conversation stopped - Click Start to begin new conversation')
+    })
+
+    electronAPI.onConversationTurnComplete(() => {
+      console.log('Turn complete - Ready for next recording')
+      setConversationState('idle')
+      setIsSpeaking(false)
+      setStatus('Turn complete - Click Record button for next interaction')
+    })
+
+    electronAPI.onConversationNoSpeech(() => {
+      console.log('No speech detected in 7 seconds')
+      setConversationState('idle')
+      setStatus('No speech detected - Click Record button to try again')
+    })
 
     // Cleanup is handled by Electron IPC - no need to return cleanup function
   }, [])
@@ -229,8 +289,9 @@ function App() {
           processorRef.current.disconnect()
         } else {
           // ScriptProcessorNode
-          (processorRef.current as any).onaudioprocess = null
-          processorRef.current.disconnect()
+          const processor = processorRef.current as any
+          processor.onaudioprocess = null
+          processor.disconnect()
         }
         processorRef.current = null
       }
@@ -263,220 +324,350 @@ function App() {
     }
   }
 
+  const startConversation = async () => {
+    if (isInitializing || conversationActive) {
+      console.log('Already initializing or active, skipping...')
+      return
+    }
+
+    try {
+      setIsInitializing(true)
+      console.log('Starting full voice conversation...')
+
+      const electronAPI = (window as any).electronAPI
+
+      // First start the STT session
+      await startLiveTranscription()
+
+      // Wait a bit for STT to be ready
+      await new Promise(resolve => setTimeout(resolve, 2000))
+
+      // Start conversation orchestrator
+      const result = await electronAPI.conversationStart({
+        mode: 'single-turn',
+        systemPrompt: 'You are a helpful voice assistant. Provide clear, concise, and friendly responses suitable for voice conversation.'
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to start conversation')
+      }
+
+      setConversationActive(true)
+      setConversationHistory([])
+      setStatus('Ready - Click microphone to speak')
+      console.log('Conversation started successfully')
+    } catch (error) {
+      console.error('Conversation start error:', error)
+      setStatus(`Error: ${(error as Error).message}`)
+      stopLiveTranscription()
+    } finally {
+      setIsInitializing(false)
+    }
+  }
+
+  const stopConversation = async () => {
+    try {
+      console.log('Stopping voice conversation...')
+
+      const electronAPI = (window as any).electronAPI
+      await electronAPI.conversationStop()
+
+      // Stop STT session
+      await stopLiveTranscription()
+
+      setConversationActive(false)
+      setConversationState('idle')
+      setStatus('Voice conversation stopped')
+      console.log('Conversation stopped successfully')
+    } catch (error) {
+      console.error('Conversation stop error:', error)
+      setStatus(`Error: ${(error as Error).message}`)
+    }
+  }
+
+  const startManualRecording = async () => {
+    try {
+      console.log('Starting manual 7-second recording...')
+
+      const electronAPI = (window as any).electronAPI
+      const result = await electronAPI.conversationStartRecording()
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to start recording')
+      }
+
+      setStatus('Recording for 7 seconds - Speak now!')
+      console.log('Manual recording started successfully')
+    } catch (error) {
+      console.error('Manual recording start error:', error)
+      setStatus(`Error: ${(error as Error).message}`)
+    }
+  }
+
+  const playAIAudio = async (audioBuffer: ArrayBuffer) => {
+    try {
+      // Create blob from buffer (Inworld TTS returns MP3 format)
+      const blob = new Blob([audioBuffer], { type: 'audio/mpeg' })
+      const audioUrl = URL.createObjectURL(blob)
+
+      // Create or reuse audio element
+      if (!audioPlayerRef.current) {
+        audioPlayerRef.current = new Audio()
+      }
+
+      const audio = audioPlayerRef.current
+      audio.src = audioUrl
+      audio.volume = 1.0
+
+      // Play audio
+      await audio.play()
+      console.log('Playing AI audio response')
+
+      // Clean up URL after playback
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl)
+        console.log('AI audio playback finished')
+      }
+    } catch (error) {
+      console.error('Audio playback error:', error)
+    }
+  }
+
+
   return (
-    <div className="app">
-      <header className="app-header">
-        <h1>AURIX Voice Assistant</h1>
-        <p className="subtitle">OpenAI Realtime - Live Transcription</p>
-        {openaiStatus && (
-          <p className="api-status" style={{
-            color: openaiStatus.initialized ? '#4CAF50' : '#ff9800',
-            fontSize: '14px',
-            marginTop: '5px'
-          }}>
-            {openaiStatus.initialized ? '● Connected' : '○ Not Configured'}
-          </p>
-        )}
-      </header>
-
-      <main className="main-content">
-        <div className="status-bar">
-          <div className={`status-indicator ${isRecording && isSpeaking ? 'recording' : isRecording ? 'ready' : 'idle'}`}>
-            {isRecording && isSpeaking && <span className="pulse"></span>}
-          </div>
-          <p className="status-text">{status}</p>
-        </div>
-
-        <div className="controls">
-          {!isRecording ? (
-            <button
-              className="record-button"
-              onClick={startLiveTranscription}
-              disabled={!openaiStatus?.initialized}
-              style={{
-                opacity: !openaiStatus?.initialized ? 0.5 : 1,
-                cursor: !openaiStatus?.initialized ? 'not-allowed' : 'pointer'
-              }}
-            >
-              <svg className="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-                />
-              </svg>
-              <span>Start Live Transcription</span>
-            </button>
-          ) : (
-            <button
-              className="stop-button"
-              onClick={stopLiveTranscription}
-            >
-              <svg className="stop-icon" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="6" y="6" width="12" height="12" rx="2" />
-              </svg>
-              <span>Stop Transcription</span>
-            </button>
-          )}
-        </div>
-
-        {isRecording && (
-          <div>
-            <div className="live-indicator" style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '10px',
-              margin: '20px 0',
-              padding: '15px',
-              backgroundColor: isSpeaking ? '#e8f5e9' : '#f5f5f5',
-              borderRadius: '8px',
-              border: `2px solid ${isSpeaking ? '#4CAF50' : '#ddd'}`,
-              transition: 'all 0.3s ease'
-            }}>
-              <span style={{ fontSize: '24px' }}>
-                {isSpeaking ? '[MIC]' : '[IDLE]'}
-              </span>
-              <span style={{ fontWeight: 'bold', color: isSpeaking ? '#4CAF50' : '#666' }}>
-                {isSpeaking ? 'Listening...' : 'Waiting for speech...'}
-              </span>
-            </div>
-
-            <div style={{
-              margin: '10px 0',
-              padding: '15px',
-              backgroundColor: '#f5f5f5',
-              borderRadius: '8px',
-              border: '1px solid #ddd'
-            }}>
-              <div style={{ marginBottom: '8px', fontSize: '14px', fontWeight: 'bold' }}>
-                Microphone Level: {(audioLevel * 100).toFixed(1)}%
-              </div>
-              <div style={{
-                width: '100%',
-                height: '20px',
-                backgroundColor: '#ddd',
-                borderRadius: '10px',
-                overflow: 'hidden'
-              }}>
-                <div style={{
-                  width: `${Math.min(audioLevel * 100, 100)}%`,
-                  height: '100%',
-                  backgroundColor: audioLevel > 0.1 ? '#4CAF50' : audioLevel > 0.05 ? '#ff9800' : '#f44336',
-                  transition: 'width 0.1s ease',
-                  borderRadius: '10px'
-                }}></div>
-              </div>
-              <div style={{ marginTop: '5px', fontSize: '12px', color: '#666' }}>
-                {audioLevel < 0.01 ? 'No audio detected - check microphone' : audioLevel < 0.05 ? 'Audio very low' : 'Good audio level'}
-              </div>
-            </div>
-
-            {lastLatency !== null && (
-              <div style={{
-                margin: '10px 0',
-                padding: '10px 15px',
-                backgroundColor: '#e3f2fd',
-                borderRadius: '8px',
-                border: '1px solid #2196F3',
-                fontSize: '13px',
-                color: '#0d47a1'
-              }}>
-                <strong>Last transcription latency:</strong> {lastLatency}ms
-                <span style={{ marginLeft: '10px', fontSize: '11px', color: '#666' }}>
-                  ({(lastLatency / 1000).toFixed(2)}s after you stopped speaking)
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {isRecording && (
-          <div className="waveform">
-            <div className="wave-bar" style={{ animationPlayState: isSpeaking ? 'running' : 'paused' }}></div>
-            <div className="wave-bar" style={{ animationPlayState: isSpeaking ? 'running' : 'paused' }}></div>
-            <div className="wave-bar" style={{ animationPlayState: isSpeaking ? 'running' : 'paused' }}></div>
-            <div className="wave-bar" style={{ animationPlayState: isSpeaking ? 'running' : 'paused' }}></div>
-            <div className="wave-bar" style={{ animationPlayState: isSpeaking ? 'running' : 'paused' }}></div>
-          </div>
-        )}
-
-        <div className="transcription-box" style={{
-          minHeight: '300px',
-          maxHeight: '500px',
-          overflowY: 'auto',
-          border: '2px solid #4CAF50',
-          backgroundColor: '#f5f5f5',
-          padding: '20px',
-          borderRadius: '8px',
-          marginTop: '20px'
+    <div style={{
+      minHeight: '100vh',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '20px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+    }}>
+      {/* Title */}
+      <div style={{
+        textAlign: 'center',
+        marginBottom: '40px'
+      }}>
+        <h1 style={{
+          fontSize: '48px',
+          fontWeight: '700',
+          color: 'white',
+          margin: '0 0 10px 0',
+          textShadow: '0 2px 10px rgba(0,0,0,0.2)'
         }}>
-          <h3 style={{ color: '#4CAF50', marginBottom: '15px' }}>
-            Live Transcription:
-          </h3>
-          <div className="transcription-text" style={{
-            fontSize: '18px',
-            lineHeight: '1.8',
-            color: '#333',
-            minHeight: '100px',
-            whiteSpace: 'pre-wrap',
-            wordWrap: 'break-word'
-          }}>
-            {transcription || (isRecording ? '(Listening... speak into your microphone)' : '(Click "Start Live Transcription" to begin...)')}
-          </div>
+          AURIX
+        </h1>
+        <p style={{
+          fontSize: '18px',
+          color: 'rgba(255,255,255,0.9)',
+          margin: 0
+        }}>
+          Voice Assistant
+        </p>
+      </div>
+
+      {/* Main Card */}
+      <div style={{
+        backgroundColor: 'white',
+        borderRadius: '24px',
+        padding: '40px',
+        boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+        maxWidth: '600px',
+        width: '100%',
+        textAlign: 'center'
+      }}>
+        {/* Status Indicator */}
+        <div style={{
+          marginBottom: '30px',
+          fontSize: '18px',
+          color: '#666',
+          fontWeight: '600',
+          minHeight: '28px'
+        }}>
+          {!openaiStatus?.initialized && '⚠️ Setting up...'}
+          {openaiStatus?.initialized && isInitializing && '🔄 Initializing...'}
+          {openaiStatus?.initialized && !isInitializing && !conversationActive && '👆 Click to start'}
+          {openaiStatus?.initialized && !isInitializing && conversationActive && conversationState === 'idle' && '🎤 Click to record'}
+          {conversationState === 'listening' && '🔴 Recording... (7 seconds)'}
+          {conversationState === 'transcribing' && ' Processing speech...'}
+          {conversationState === 'ai_thinking' && ' AI thinking...'}
+          {conversationState === 'tts_generating' && ' Creating voice...'}
+          {conversationState === 'ai_speaking' && ' AI speaking...'}
         </div>
 
-        {!openaiStatus?.initialized && (
-          <div className="warning-box" style={{
-            marginTop: '20px',
-            padding: '15px',
-            backgroundColor: '#fff3cd',
-            border: '1px solid #ffc107',
-            borderRadius: '8px',
-            color: '#856404'
+        {/* Main Button */}
+        <button
+          onClick={() => {
+            if (!conversationActive && !isInitializing) {
+              startConversation()
+            } else if (conversationActive && conversationState === 'idle') {
+              startManualRecording()
+            }
+          }}
+          disabled={!openaiStatus?.initialized || isInitializing || (conversationActive && conversationState !== 'idle')}
+          style={{
+            width: '180px',
+            height: '180px',
+            borderRadius: '50%',
+            border: 'none',
+            background: !openaiStatus?.initialized
+              ? '#ccc'
+              : conversationState === 'listening'
+              ? 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)'
+              : (conversationState === 'idle' || !conversationActive)
+              ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+              : '#e0e0e0',
+            color: 'white',
+            fontSize: '80px',
+            cursor: (openaiStatus?.initialized && (conversationState === 'idle' || !conversationActive)) ? 'pointer' : 'not-allowed',
+            boxShadow: (conversationState === 'idle' || !conversationActive) && openaiStatus?.initialized
+              ? '0 10px 40px rgba(102, 126, 234, 0.4)'
+              : conversationState === 'listening'
+              ? '0 10px 40px rgba(240, 147, 251, 0.4), 0 0 0 20px rgba(240, 147, 251, 0.1), 0 0 0 40px rgba(240, 147, 251, 0.05)'
+              : 'none',
+            transition: 'all 0.3s ease',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto',
+            animation: conversationState === 'listening' ? 'pulse 1.5s infinite' : 'none'
+          }}
+          onMouseOver={(e) => {
+            if (openaiStatus?.initialized && (conversationState === 'idle' || !conversationActive)) {
+              e.currentTarget.style.transform = 'scale(1.05)'
+            }
+          }}
+          onMouseOut={(e) => {
+            if (openaiStatus?.initialized && (conversationState === 'idle' || !conversationActive)) {
+              e.currentTarget.style.transform = 'scale(1)'
+            }
+          }}
+        >
+          🎙️
+        </button>
+
+        {/* Small End Conversation Button */}
+        {conversationActive && (
+          <button
+            onClick={stopConversation}
+            style={{
+              marginTop: '20px',
+              padding: '8px 20px',
+              borderRadius: '20px',
+              border: 'none',
+              backgroundColor: '#f5f5f5',
+              color: '#999',
+              fontSize: '12px',
+              cursor: 'pointer',
+              fontWeight: '500',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.backgroundColor = '#e0e0e0'
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.backgroundColor = '#f5f5f5'
+            }}
+          >
+            End Session
+          </button>
+        )}
+
+        {/* Latest Exchange - Only show most recent user input and AI output */}
+        {conversationHistory.length > 0 && (
+          <div style={{
+            marginTop: '40px',
+            textAlign: 'left',
+            padding: '10px'
           }}>
-            <strong>Setup Required:</strong>
-            <p>Please add your OpenAI API key to the .env file:</p>
-            <code style={{
-              display: 'block',
-              marginTop: '10px',
-              padding: '10px',
-              backgroundColor: '#fff',
-              borderRadius: '4px',
-              fontSize: '14px'
-            }}>
-              OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
-            </code>
-            <p style={{ marginTop: '10px', fontSize: '14px' }}>
-              Get your API key from: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style={{ color: '#007bff' }}>https://platform.openai.com/api-keys</a>
-            </p>
-            <p style={{ marginTop: '10px', fontSize: '13px', fontStyle: 'italic' }}>
-              Then restart the app with: <code>npm run electron:dev</code>
-            </p>
+            {/* User Input */}
+            {(() => {
+              const lastUserMsg = [...conversationHistory].reverse().find(msg => msg.type === 'user')
+              return lastUserMsg && (
+                <div style={{
+                  marginBottom: '20px'
+                }}>
+                  <div style={{
+                    fontSize: '12px',
+                    color: '#999',
+                    marginBottom: '8px',
+                    fontWeight: '600'
+                  }}>
+                    YOU SAID:
+                  </div>
+                  <div style={{
+                    padding: '16px 20px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    color: 'white',
+                    fontSize: '16px',
+                    lineHeight: '1.6'
+                  }}>
+                    {lastUserMsg.text}
+                  </div>
+                </div>
+              )
+            })()}
+
+            {/* AI Output */}
+            {(() => {
+              const lastAIMsg = [...conversationHistory].reverse().find(msg => msg.type === 'ai')
+              return lastAIMsg && (
+                <div>
+                  <div style={{
+                    fontSize: '12px',
+                    color: '#999',
+                    marginBottom: '8px',
+                    fontWeight: '600'
+                  }}>
+                    AI RESPONSE:
+                  </div>
+                  <div style={{
+                    padding: '16px 20px',
+                    borderRadius: '12px',
+                    backgroundColor: '#f5f5f5',
+                    color: '#333',
+                    fontSize: '16px',
+                    lineHeight: '1.6'
+                  }}>
+                    {lastAIMsg.text}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )}
 
-        {openaiStatus?.initialized && (
-          <div className="info-box" style={{
-            marginTop: '20px',
-            padding: '15px',
-            backgroundColor: '#e3f2fd',
-            border: '1px solid #2196F3',
-            borderRadius: '8px',
-            color: '#0d47a1',
-            fontSize: '14px'
+        {/* Setup Warning */}
+        {!openaiStatus?.initialized && (
+          <div style={{
+            marginTop: '30px',
+            padding: '20px',
+            backgroundColor: '#fff3cd',
+            borderRadius: '12px',
+            fontSize: '13px',
+            color: '#856404',
+            textAlign: 'left'
           }}>
-            <strong>How it works:</strong>
-            <ul style={{ marginTop: '10px', marginBottom: 0, paddingLeft: '20px' }}>
-              <li>Transcription appears in real-time as you speak</li>
-              <li>Green indicator shows when speech is detected</li>
-              <li>No need to stop recording - transcription updates live</li>
-              <li>Uses OpenAI's Realtime API with WebSocket streaming</li>
-            </ul>
+            <strong>⚠️ Setup Required</strong>
+            <p style={{ margin: '10px 0 0 0' }}>
+              Please configure your OpenAI API key in the .env file
+            </p>
           </div>
         )}
-      </main>
+      </div>
+
+      {/* Pulse Animation */}
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+          }
+        `}
+      </style>
     </div>
   )
 }

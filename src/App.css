@@ -1,7 +1,7 @@
 .app {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: #000000;
+  color: #ffffff;
   padding: 20px;
 }
 
@@ -13,7 +13,7 @@
 .app-header h1 {
   font-size: 3rem;
   margin: 0;
-  background: linear-gradient(45deg, #fff, #ddd);
+  background: linear-gradient(45deg, #4ade80, #22c55e);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -175,12 +175,13 @@ button {
 }
 
 .transcription-box {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 20px;
   padding: 30px;
   margin: 30px 0;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
 .transcription-box h3 {
@@ -190,7 +191,8 @@ button {
 }
 
 .transcription-text {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   padding: 20px;
   border-radius: 10px;
   font-size: 1.2rem;
@@ -199,8 +201,9 @@ button {
 }
 
 .info-panel {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 20px;
   padding: 30px;
   margin: 30px 0;

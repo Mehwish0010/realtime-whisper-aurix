@@ -1,15 +1,6 @@
-/**
- * Inworld.ai Text-to-Speech Integration
- *
- * This module handles text-to-speech conversion using the Inworld.ai API.
- * It supports voice customization, text chunking for long inputs, and
- * returns audio data in various formats (MP3, OGG_OPUS, WAV).
- */
 
 interface InworldConfig {
-  workspaceId: string
-  apiKey: string
-  apiSecret: string
+  apiKey: string  // Base64-encoded API key
   defaultVoice?: string
   defaultModel?: 'inworld-tts-1' | 'inworld-tts-1-max'
 }
@@ -39,21 +30,22 @@ let authHeader: string | null = null
  * Initialize Inworld TTS with API credentials
  */
 export function initializeInworld(config: InworldConfig): void {
-  if (!config.workspaceId || !config.apiKey || !config.apiSecret) {
-    throw new Error('Please set INWORLD_WORKSPACE_ID, INWORLD_API_KEY, and INWORLD_API_SECRET in your .env file')
+  if (!config.apiKey || config.apiKey === 'your-base64-api-key-here') {
+    throw new Error('Please set INWORLD_API_KEY in your .env file. Get it from https://platform.inworld.ai')
   }
 
   inworldConfig = {
     ...config,
-    defaultVoice: config.defaultVoice || 'inworld-tts-1-default',
+    defaultVoice: config.defaultVoice || undefined,  // Don't set a default voice, let Inworld use its own default
     defaultModel: config.defaultModel || 'inworld-tts-1'
   }
 
-  // Create Basic Auth header: Base64(workspaceId:apiKey:apiSecret)
-  const credentials = `${config.workspaceId}:${config.apiKey}:${config.apiSecret}`
-  authHeader = 'Basic ' + Buffer.from(credentials).toString('base64')
+  // Use the Base64 API key directly from Inworld Studio
+  authHeader = 'Basic ' + config.apiKey
 
   console.log('Inworld TTS client initialized successfully')
+  console.log('Default voice:', inworldConfig.defaultVoice)
+  console.log('Default model:', inworldConfig.defaultModel)
 }
 
 /**
@@ -75,7 +67,7 @@ export function getStatus(): { initialized: boolean; voiceId: string | null; mod
 }
 
 /**
- * Chunk text into segments of max 2000 characters
+* Chunk text into segments of max 2000 characters
  * Splits on sentence boundaries to maintain natural speech
  */
 function chunkText(text: string, maxChunkSize: number = 1900): string[] {
@@ -126,17 +118,22 @@ export async function synthesizeSpeech(options: TTSOptions): Promise<Buffer> {
       const chunk = textChunks[i]
       console.log(`Processing chunk ${i + 1}/${textChunks.length} (${chunk.length} chars)`)
 
-      const requestBody = {
+      const voiceId = options.voiceId || inworldConfig.defaultVoice
+      const requestBody: any = {
         text: chunk,
-        voiceId: options.voiceId || inworldConfig.defaultVoice,
-        modelId: options.modelId || inworldConfig.defaultModel,
-        audioConfig: options.audioConfig || {
-          audioEncoding: 'MP3',
-          bitRate: 128000,
-          sampleRateHertz: 48000,
-          speakingRate: 1.0
+        model_id: options.modelId || inworldConfig.defaultModel,
+        audio_config: options.audioConfig || {
+          audio_encoding: 'MP3',
+          bit_rate: 128000,
+          sample_rate_hertz: 48000,
+          speaking_rate: 1.0
         },
         temperature: options.temperature !== undefined ? options.temperature : 1.1
+      }
+
+      // Only include voice_id if it's specified (use snake_case for API)
+      if (voiceId) {
+        requestBody.voice_id = voiceId
       }
 
       const response = await fetch('https://api.inworld.ai/tts/v1/voice', {
@@ -163,7 +160,7 @@ export async function synthesizeSpeech(options: TTSOptions): Promise<Buffer> {
         }
       }
 
-      const data: TTSResponse = await response.json()
+      const data = await response.json() as unknown as TTSResponse
 
       if (!data.audioContent) {
         throw new Error('No audio content received from Inworld API')

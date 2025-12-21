@@ -10,7 +10,7 @@ interface RealtimeConfig {
   instructions?: string
 }
 
-class RealtimeSession extends EventEmitter {
+export class RealtimeSession extends EventEmitter {
   private ws: WebSocket | null = null
   private apiKey: string
   private model: string
@@ -165,6 +165,11 @@ class RealtimeSession extends EventEmitter {
         break
 
       case 'error':
+        // Ignore harmless "buffer too small" errors (happens during silence)
+        if (event.error?.code === 'input_audio_buffer_commit_empty') {
+          // This is expected when there's silence - just ignore it
+          break
+        }
         console.error('Server error:', event.error)
         this.emit('error', event.error)
         break

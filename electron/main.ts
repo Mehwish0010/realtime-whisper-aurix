@@ -113,19 +113,16 @@ app.whenReady().then(() => {
   }
 
   // Initialize Inworld TTS
-  const inworldWorkspaceId = process.env.INWORLD_WORKSPACE_ID
   const inworldApiKey = process.env.INWORLD_API_KEY
-  const inworldApiSecret = process.env.INWORLD_API_SECRET
 
-  if (!inworldWorkspaceId || !inworldApiKey || !inworldApiSecret) {
-    console.warn('WARNING: Inworld TTS credentials not set in .env file')
+  if (!inworldApiKey || inworldApiKey === 'your-base64-api-key-here') {
+    console.warn('WARNING: Inworld TTS API key not set in .env file')
     console.warn('Voice conversation features will not be available')
+    console.warn('Get your API key from: https://platform.inworld.ai')
   } else {
     try {
       initializeInworld({
-        workspaceId: inworldWorkspaceId,
         apiKey: inworldApiKey,
-        apiSecret: inworldApiSecret,
         defaultVoice: process.env.INWORLD_DEFAULT_VOICE,
         defaultModel: (process.env.INWORLD_DEFAULT_MODEL as any) || 'inworld-tts-1'
       })
@@ -559,6 +556,24 @@ ipcMain.handle('conversation-start', async (_event, options?: any) => {
       }
     })
 
+    orchestrator.on('stopped', () => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-stopped')
+      }
+    })
+
+    orchestrator.on('turn_complete', () => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-turn-complete')
+      }
+    })
+
+    orchestrator.on('no_speech_detected', () => {
+      if (mainWindow) {
+        mainWindow.webContents.send('conversation-no-speech')
+      }
+    })
+
     await orchestrator.start(sttSession, options)
 
     return {
@@ -605,6 +620,25 @@ ipcMain.handle('conversation-status', async () => {
     }
   } catch (error: any) {
     console.error('Get conversation status error:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+ipcMain.handle('conversation-start-recording', async () => {
+  try {
+    console.log('Manually starting 7-second recording...')
+    const orchestrator = getConversationOrchestrator()
+    orchestrator.startRecording()
+
+    return {
+      success: true,
+      message: 'Recording started for 7 seconds'
+    }
+  } catch (error: any) {
+    console.error('Failed to start recording:', error)
     return {
       success: false,
       error: error.message

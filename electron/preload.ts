@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   conversationStart: (options?: any) => ipcRenderer.invoke('conversation-start', options),
   conversationStop: () => ipcRenderer.invoke('conversation-stop'),
   conversationStatus: () => ipcRenderer.invoke('conversation-status'),
+  conversationStartRecording: () => ipcRenderer.invoke('conversation-start-recording'),
 
   // Conversation event listeners
   onUserSpoke: (callback: (text: string) => void) => {
@@ -59,5 +60,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onConversationError: (callback: (error: string) => void) => {
     ipcRenderer.on('conversation-error', (_event: any, error: string) => callback(error))
+  },
+  onConversationStopped: (callback: () => void) => {
+    ipcRenderer.on('conversation-stopped', () => callback())
+  },
+  onConversationTurnComplete: (callback: () => void) => {
+    ipcRenderer.on('conversation-turn-complete', () => callback())
+  },
+  onConversationNoSpeech: (callback: () => void) => {
+    ipcRenderer.on('conversation-no-speech', () => callback())
   }
 })

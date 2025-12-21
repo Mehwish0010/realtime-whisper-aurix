@@ -1,23 +1,9 @@
 # AURIX Voice Assistant - Voice Conversation Setup Guide
 
-## What This Feature Does (Aasan Urdu Mein Samjhain)
 
-Yeh feature aapko AI se baat karne ki facility deta hai - bilkul ek asli insaan se baat karne jaise!
 
-**Kaise kaam karta hai:**
-1. Aap microphone mein baat karte hain
-2. AI aapki baat sunti hai aur samajhti hai (Speech-to-Text)
-3. AI aapke sawal ka jawab sochti hai (GPT-4 Turbo)
-4. AI ka jawab awaaz mein convert hota hai (Text-to-Speech)
-5. Aapko speaker se AI ki awaaz sunai deti hai
 
-**Example:**
-- Aap: "Hello, what's the weather like?"
-- AI: Responds with natural voice: "I'm a voice assistant and don't have access to real-time weather data, but I can help you with other questions!"
-
----
-
-## Features Added (Naye Features)
+## Features Added 
 
 ### 1. Text-to-Speech (TTS) - AI Ki Awaaz
 - AI ka jawab text se awaaz mein convert hota hai
@@ -60,57 +46,34 @@ You Speak → Whisper converts to text → GPT-4 thinks → Inworld makes speech
 4. Key copy karen (sk- se shuru hoti hai)
 5. Key ko safely save karen
 
-### Step 2: Get Inworld.ai Credentials
+### Step 2: Get Inworld.ai API Key
 
 **English:**
-1. Go to https://studio.inworld.ai
+1. Go to https://platform.inworld.ai
 2. Sign up or log in
-3. Create a workspace (if you don't have one)
-4. Go to "API Keys" section
-5. Copy three things:
-   - Workspace ID
-   - API Key
-   - API Secret
-
-**Roman Urdu:**
-1. https://studio.inworld.ai par jayen
-2. Sign up karen ya login karen
-3. Workspace banayen (agar nahi hai to)
-4. "API Keys" section mein jayen
-5. Teen cheezen copy karen:
-   - Workspace ID
-   - API Key
-   - API Secret
-
-### Step 3: Configure .env File
-
-**English:**
-1. Open your project folder
-2. Find `.env` file (if not there, create it)
-3. Add these lines:
-
-```
-# OpenAI Configuration
-OPENAI_API_KEY=sk-your-key-here
-
-# Inworld TTS Configuration
-INWORLD_WORKSPACE_ID=ws-xxxxx
-INWORLD_API_KEY=your-api-key-here
-INWORLD_API_SECRET=your-secret-here
+3. Navigate to **Settings > API Keys**
+4. Click **"Generate New Key"**
+5. Copy the **entire Base64 credentials string** (it's a long encoded string)
+   - This is ONE string that contains everything you need
+   - Do NOT copy individual fields
 
 # Optional
 INWORLD_DEFAULT_VOICE=inworld-tts-1-default
 INWORLD_DEFAULT_MODEL=inworld-tts-1
 ```
 
-4. Replace the placeholder values with your actual credentials
+4. Replace `<paste-your-base64-key-here>` with the Base64 string you copied from Inworld Studio
+   - Paste the ENTIRE string
+   - Do NOT add quotes around it
 5. Save the file
 
 **Roman Urdu:**
 1. Apne project folder ko kholen
 2. `.env` file dhundhen (agar nahi hai to banayein)
 3. Yeh lines add karen (upar dekhen)
-4. Placeholder values ko apni asli credentials se replace karen
+4. `<paste-your-base64-key-here>` ko Inworld Studio se copy ki hui Base64 string se replace karen
+   - PURI string paste karen
+   - Quotes mat lagana
 5. File save karen
 
 ### Step 4: Run the Application

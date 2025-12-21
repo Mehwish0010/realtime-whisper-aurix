@@ -6,9 +6,9 @@
  */
 
 import { EventEmitter } from 'events'
-import type { RealtimeSession } from './openai-realtime.js'
-import { getConversationManager } from './openai-chat.js'
-import { synthesizeSpeech, isInitialized as isTTSInitialized } from './inworld-tts.js'
+import type { RealtimeSession } from './openai-realtime'
+import { getConversationManager } from './openai-chat'
+import { synthesizeSpeech, isInitialized as isTTSInitialized } from './inworld-tts'
 
 export type ConversationMode = 'continuous' | 'single-turn'
 export type ConversationState = 'idle' | 'listening' | 'transcribing' | 'ai_thinking' | 'tts_generating' | 'ai_speaking'
@@ -40,6 +40,10 @@ export class ConversationOrchestrator extends EventEmitter {
   private processingResponse: boolean = false
   private lastTranscription: string = ''
   private transcriptionTimeout: NodeJS.Timeout | null = null
+  private speechStartTime: number = 0
+  private speechCollectionDuration: number = 7000  // Collect speech for exactly 7 seconds, then mic OFF
+  private speechCollectionTimer: NodeJS.Timeout | null = null
+  private isCollectingSpeech: boolean = false  // Flag to prevent multiple simultaneous collections
 
   constructor() {
     super()
@@ -77,8 +81,8 @@ export class ConversationOrchestrator extends EventEmitter {
     // Set up STT event listeners
     this.setupSTTListeners()
 
-    this.setState('listening')
-    console.log('Conversation orchestrator started in', this.mode, 'mode')
+    this.setState('idle')
+    console.log('Conversation orchestrator started in', this.mode, 'mode - Waiting for manual recording trigger')
 
     this.emit('started', { mode: this.mode })
   }
@@ -94,11 +98,17 @@ export class ConversationOrchestrator extends EventEmitter {
     this.isActive = false
     this.setState('idle')
     this.processingResponse = false
+    this.isCollectingSpeech = false  // Reset collection flag
 
     // Clear any pending timeouts
     if (this.transcriptionTimeout) {
       clearTimeout(this.transcriptionTimeout)
       this.transcriptionTimeout = null
+    }
+
+    if (this.speechCollectionTimer) {
+      clearTimeout(this.speechCollectionTimer)
+      this.speechCollectionTimer = null
     }
 
     // Remove STT listeners (done through session cleanup)
@@ -126,45 +136,32 @@ export class ConversationOrchestrator extends EventEmitter {
   private setupSTTListeners(): void {
     if (!this.sttSession) return
 
-    // When user speaks is detected
-    this.sttSession.on('speech_started', () => {
-      if (this.isActive && !this.processingResponse) {
-        this.setState('listening')
-        this.emit('user_speaking')
-      }
-    })
-
-    // When user stops speaking
+    // When user stops speaking (for UI feedback only)
     this.sttSession.on('speech_stopped', () => {
       if (this.isActive && !this.processingResponse) {
-        this.setState('transcribing')
         this.emit('user_stopped_speaking')
       }
     })
 
     // When transcription is ready
     this.sttSession.on('transcription', async (text: string) => {
-      if (!this.isActive || this.processingResponse) {
-        console.log('Ignoring transcription - not active or already processing')
+      if (!this.isActive || this.processingResponse || !this.isCollectingSpeech) {
+        console.log('Ignoring transcription - not active, processing, or not collecting')
         return
       }
 
       // Ignore empty or very short transcriptions
       if (!text || text.trim().length < 3) {
         console.log('Ignoring short transcription:', text)
-        this.setState('listening')
         return
       }
 
-      // Debounce rapid transcriptions (wait 500ms for more text)
-      if (this.transcriptionTimeout) {
-        clearTimeout(this.transcriptionTimeout)
-      }
-
+      // Accumulate transcriptions (7-second timer will handle processing, then mic OFF)
       this.lastTranscription = text
-      this.transcriptionTimeout = setTimeout(async () => {
-        await this.handleUserTranscription(this.lastTranscription)
-      }, 500)
+      const elapsedTime = Date.now() - this.speechStartTime
+      const remainingTime = Math.max(0, this.speechCollectionDuration - elapsedTime)
+
+      console.log(`📝 Transcription: "${text}" | ⏱️ ${(elapsedTime/1000).toFixed(1)}s / 7s | 🎤 Mic turns off in ${(remainingTime/1000).toFixed(1)}s`)
     })
 
     // Handle errors
@@ -174,7 +171,8 @@ export class ConversationOrchestrator extends EventEmitter {
 
       if (this.isActive) {
         this.processingResponse = false
-        this.setState('listening')
+        this.isCollectingSpeech = false  // Reset collection flag on STT error
+        this.setState('idle')
       }
     })
   }
@@ -189,13 +187,22 @@ export class ConversationOrchestrator extends EventEmitter {
 
     try {
       this.processingResponse = true
-      console.log('Processing user transcription:', transcription)
+      this.speechStartTime = 0  // Reset speech timer
+
+      // Clear the 8-second collection timer
+      if (this.speechCollectionTimer) {
+        clearTimeout(this.speechCollectionTimer)
+        this.speechCollectionTimer = null
+      }
+
+      console.log('🔇 Microphone OFF - Processing transcription:', transcription)
 
       // Emit user spoke event
       this.emit('user_spoke', transcription)
 
       // Get AI response
       this.setState('ai_thinking')
+      console.log('🤖 AI processing request...')
       const aiResponse = await this.generateAIResponse(transcription)
 
       if (!this.isActive) {
@@ -203,11 +210,12 @@ export class ConversationOrchestrator extends EventEmitter {
         return
       }
 
-      console.log('AI response received:', aiResponse)
+      console.log('✅ AI response received:', aiResponse)
       this.emit('ai_response', aiResponse)
 
       // Convert to speech
       this.setState('tts_generating')
+      console.log('🔊 Generating speech audio...')
       const audioBuffer = await this.generateSpeech(aiResponse)
 
       if (!this.isActive) {
@@ -217,6 +225,7 @@ export class ConversationOrchestrator extends EventEmitter {
 
       // Emit audio for playback
       this.setState('ai_speaking')
+      console.log('🔊 Playing AI voice response...')
       this.emit('ai_audio', audioBuffer)
 
       // Wait a bit for audio to finish (estimated based on text length)
@@ -225,23 +234,24 @@ export class ConversationOrchestrator extends EventEmitter {
 
       // Reset state
       this.processingResponse = false
+      this.isCollectingSpeech = false  // Reset collection flag for next round
+      this.lastTranscription = ''  // Clear transcription for next round
 
+      // Always go to idle after completing a turn - user must manually trigger next recording
       if (this.isActive) {
-        if (this.mode === 'continuous') {
-          this.setState('listening')
-          console.log('Ready for next user input')
-        } else {
-          // Single-turn mode - stop conversation
-          this.stop()
-        }
+        this.setState('idle')
+        console.log('✅ Turn complete - Microphone OFF. Click button to record again.')
+        this.emit('turn_complete')
       }
     } catch (error: any) {
       console.error('Error processing transcription:', error)
       this.emit('error', error)
 
       this.processingResponse = false
+      this.isCollectingSpeech = false  // Reset collection flag on error
+      this.lastTranscription = ''  // Clear transcription on error too
       if (this.isActive) {
-        this.setState('listening')
+        this.setState('idle')
       }
     }
   }
@@ -307,6 +317,60 @@ export class ConversationOrchestrator extends EventEmitter {
     const wordCount = text.split(/\s+/).length
     const estimatedSeconds = (wordCount / 2.5) + 1  // Add 1 second buffer
     return estimatedSeconds * 1000  // Convert to milliseconds
+  }
+
+  /**
+   * Manually start recording for 7 seconds (push-to-talk)
+   */
+  startRecording(): void {
+    // Ignore if already collecting or processing
+    if (!this.isActive || this.processingResponse || this.isCollectingSpeech) {
+      console.log('⏭️ Ignoring start recording - already collecting or processing')
+      return
+    }
+
+    this.isCollectingSpeech = true  // Mark as collecting
+    this.speechStartTime = Date.now()  // Record when recording started
+    this.lastTranscription = ''  // Clear previous transcription
+    this.setState('listening')
+    this.emit('user_speaking')
+    console.log(`🎤 Microphone ON - Recording for ${this.speechCollectionDuration}ms (7 seconds)...`)
+
+    // Set timer to automatically stop listening and process after 7 seconds
+    if (this.speechCollectionTimer) {
+      clearTimeout(this.speechCollectionTimer)
+    }
+
+    this.speechCollectionTimer = setTimeout(async () => {
+      console.log('🔇 7 seconds elapsed - Microphone OFF, processing speech...')
+      this.setState('transcribing')
+
+      // Clear any pending transcription timeout
+      if (this.transcriptionTimeout) {
+        clearTimeout(this.transcriptionTimeout)
+        this.transcriptionTimeout = null
+      }
+
+      // Wait up to 3 more seconds for transcription to arrive
+      let attempts = 0
+      const maxAttempts = 30 // 30 * 100ms = 3 seconds
+
+      while (attempts < maxAttempts && (!this.lastTranscription || this.lastTranscription.trim().length === 0)) {
+        await this.wait(100)
+        attempts++
+      }
+
+      // Process whatever we collected
+      if (this.lastTranscription && this.lastTranscription.trim().length > 0) {
+        console.log('✅ Transcription received, processing...')
+        await this.handleUserTranscription(this.lastTranscription)
+      } else {
+        console.log('⚠️ No speech collected after waiting, returning to idle...')
+        this.isCollectingSpeech = false  // Reset flag if no speech collected
+        this.setState('idle')
+        this.emit('no_speech_detected')
+      }
+    }, this.speechCollectionDuration)
   }
 
   /**
