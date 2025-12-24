@@ -18,121 +18,92 @@ type ConversationState = 'idle' | 'listening' | 'transcribing' | 'ai_thinking' |
 
 function App() {
   const [, setIsRecording] = useState(false)
-  const [, setTranscription] = useState('')
   const [, setStatus] = useState('Checking OpenAI status...')
   const [openaiStatus, setOpenaiStatus] = useState<OpenAIStatus | null>(null)
-  const [, setIsSpeaking] = useState(false)
-  const [, setAudioLevel] = useState(0)
-  const [, setLastLatency] = useState<number | null>(null)
+  const [audioLevel, setAudioLevel] = useState(0)
+  const [availableMics, setAvailableMics] = useState<MediaDeviceInfo[]>([])
+  const [selectedMicId, setSelectedMicId] = useState<string>('')
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
   const [conversationActive, setConversationActive] = useState(false)
   const [conversationState, setConversationState] = useState<ConversationState>('idle')
   const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([])
   const [isInitializing, setIsInitializing] = useState(false)
 
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const processorRef = useRef<AudioWorkletNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const speechStopTimeRef = useRef<number | null>(null)
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null)
 
   // Check OpenAI status on mount
   useEffect(() => {
     checkOpenAIStatus()
-
-    // Set up listeners only once
-    const electronAPI = (window as any).electronAPI
-    if (!electronAPI) return
-
-    // Create handler functions for STT
-    const handleTranscription = (text: string) => {
-      console.log('Received transcription:', text)
-
-      // Calculate latency
-      if (speechStopTimeRef.current) {
-        const latency = Date.now() - speechStopTimeRef.current
-        setLastLatency(latency)
-        console.log(`Total latency from speech stop to transcription: ${latency}ms`)
-      }
-
-      setTranscription(prev => {
-        // Avoid duplicates by checking if text already exists
-        if (prev.includes(text)) return prev
-        return prev + ' ' + text
-      })
-    }
-
-    const handleSpeechStarted = () => {
-      console.log('Speech detected')
-      setIsSpeaking(true)
-    }
-
-    const handleSpeechStopped = () => {
-      console.log('Speech ended')
-      setIsSpeaking(false)
-      speechStopTimeRef.current = Date.now()
-    }
-
-    const handleError = (error: string) => {
-      console.error('Realtime error:', error)
-      setStatus(`Error: ${error}`)
-    }
-
-    // Set up STT listeners
-    electronAPI.onRealtimeTranscription(handleTranscription)
-    electronAPI.onRealtimeSpeechStarted(handleSpeechStarted)
-    electronAPI.onRealtimeSpeechStopped(handleSpeechStopped)
-    electronAPI.onRealtimeError(handleError)
-
-    // Set up conversation event listeners
-    electronAPI.onUserSpoke((text: string) => {
-      console.log('User spoke:', text)
-      setConversationHistory(prev => [...prev, { type: 'user', text, timestamp: Date.now() }])
-    })
-
-    electronAPI.onAIResponse((text: string) => {
-      console.log('AI response:', text)
-      setConversationHistory(prev => [...prev, { type: 'ai', text, timestamp: Date.now() }])
-    })
-
-    electronAPI.onAIAudio((audioBuffer: ArrayBuffer) => {
-      console.log('AI audio received, size:', audioBuffer.byteLength)
-      playAIAudio(audioBuffer)
-    })
-
-    electronAPI.onConversationStateChanged((state: string) => {
-      console.log('Conversation state changed:', state)
-      setConversationState(state as ConversationState)
-    })
-
-    electronAPI.onConversationError((error: string) => {
-      console.error('Conversation error:', error)
-      setStatus(`Conversation error: ${error}`)
-    })
-
-    electronAPI.onConversationStopped(() => {
-      console.log('Conversation ended')
-      setConversationActive(false)
-      setConversationState('idle')
-      setIsRecording(false)
-      setIsSpeaking(false)
-      setStatus('Conversation stopped - Click Start to begin new conversation')
-    })
-
-    electronAPI.onConversationTurnComplete(() => {
-      console.log('Turn complete - Ready for next recording')
-      setConversationState('idle')
-      setIsSpeaking(false)
-      setStatus('Turn complete - Click Record button for next interaction')
-    })
-
-    electronAPI.onConversationNoSpeech(() => {
-      console.log('No speech detected in 7 seconds')
-      setConversationState('idle')
-      setStatus('No speech detected - Click Record button to try again')
-    })
-
-    // Cleanup is handled by Electron IPC - no need to return cleanup function
+    listMicrophones()
   }, [])
+
+  const listMicrophones = async () => {
+    try {
+      // Request permission first
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const mics = devices.filter(device => device.kind === 'audioinput')
+      console.log('🎤 Available microphones:', mics)
+      setAvailableMics(mics)
+      if (mics.length > 0 && !selectedMicId) {
+        setSelectedMicId(mics[0].deviceId)
+        console.log('📍 Default mic selected:', mics[0].label)
+      }
+    } catch (error) {
+      console.error('Error listing microphones:', error)
+    }
+  }
+
+  const testMicrophone = async () => {
+    try {
+      console.log('🧪 Testing microphone...')
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true
+      })
+
+      const track = stream.getAudioTracks()[0]
+      console.log('✅ Microphone connected:', track.label)
+      console.log('📊 Settings:', track.getSettings())
+
+      // Create audio context to check levels
+      const audioContext = new AudioContext()
+      const analyser = audioContext.createAnalyser()
+      const source = audioContext.createMediaStreamSource(stream)
+      source.connect(analyser)
+      analyser.fftSize = 256
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount)
+
+      console.log('🔊 Speak into your microphone for 3 seconds...')
+      let maxLevel = 0
+      const testInterval = setInterval(() => {
+        analyser.getByteFrequencyData(dataArray)
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length
+        const level = Math.round(average)
+        if (level > maxLevel) maxLevel = level
+        console.log('Current level:', level, '| Max:', maxLevel)
+      }, 100)
+
+      setTimeout(() => {
+        clearInterval(testInterval)
+        stream.getTracks().forEach(t => t.stop())
+        audioContext.close()
+        if (maxLevel > 10) {
+          console.log('✅ SUCCESS! Microphone is working. Max level:', maxLevel)
+          alert(`✅ Microphone working! Max level: ${maxLevel}`)
+        } else {
+          console.log('❌ FAILED! No audio detected. Max level:', maxLevel)
+          alert('❌ No audio detected! Check Windows microphone settings.')
+        }
+      }, 3000)
+
+    } catch (error) {
+      console.error('❌ Mic test error:', error)
+      alert('Error: ' + (error as Error).message)
+    }
+  }
 
   const checkOpenAIStatus = async () => {
     try {
@@ -156,173 +127,6 @@ function App() {
     }
   }
 
-  const startLiveTranscription = async () => {
-    try {
-      console.log('Starting live transcription...')
-
-      // Check if OpenAI is initialized
-      if (!openaiStatus?.initialized) {
-        setStatus('Error: OpenAI API key not configured')
-        return
-      }
-
-      const electronAPI = (window as any).electronAPI
-      if (!electronAPI) {
-        setStatus('Error: Not running in Electron mode')
-        return
-      }
-
-      // Start realtime session
-      setStatus('Connecting to OpenAI...')
-      const result = await electronAPI.realtimeStart()
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to start realtime session')
-      }
-
-      console.log('Realtime session started')
-
-      // IMPORTANT: Wait 2 seconds for session to be fully ready
-      console.log('Waiting for session to stabilize...')
-      setStatus('Preparing microphone...')
-      await new Promise(resolve => setTimeout(resolve, 2000))
-
-      setStatus('Live transcription active - Speak now!')
-
-      // Request microphone access
-      console.log('Requesting microphone access...')
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          sampleRate: 24000,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      })
-
-      console.log('Microphone stream obtained:', stream)
-      console.log('Audio tracks:', stream.getAudioTracks())
-      streamRef.current = stream
-
-      // Create audio context for processing
-      console.log('Creating AudioContext...')
-      const audioContext = new AudioContext({ sampleRate: 24000 })
-      audioContextRef.current = audioContext
-      console.log('AudioContext state:', audioContext.state)
-
-      // Resume audio context if suspended (required for some browsers)
-      if (audioContext.state === 'suspended') {
-        await audioContext.resume()
-        console.log('AudioContext resumed')
-      }
-
-      const source = audioContext.createMediaStreamSource(stream)
-      console.log('MediaStreamSource created')
-
-      // Use ScriptProcessorNode temporarily for debugging
-      // (Will replace with AudioWorklet once we verify mic works)
-      console.log('Creating ScriptProcessorNode (temporary for debugging)...')
-      const bufferSize = 4096
-      const processor = audioContext.createScriptProcessor(bufferSize, 1, 1)
-      processorRef.current = processor as any
-      console.log('ScriptProcessorNode created')
-
-      let frameCount = 0
-      processor.onaudioprocess = async (e) => {
-        const inputData = e.inputBuffer.getChannelData(0)
-
-        // Calculate audio level (RMS)
-        let sum = 0
-        for (let i = 0; i < inputData.length; i++) {
-          sum += inputData[i] * inputData[i]
-        }
-        const rms = Math.sqrt(sum / inputData.length)
-
-        // Log every 30 frames (~1 second at 4096 buffer)
-        if (frameCount++ % 30 === 0) {
-          console.log('Audio level:', rms.toFixed(4))
-        }
-
-        // Update audio level for visualization
-        setAudioLevel(rms)
-
-        // Convert Float32Array to Int16Array (PCM16)
-        const pcm16 = new Int16Array(inputData.length)
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]))
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
-        }
-
-        // Send to OpenAI
-        try {
-          await electronAPI.realtimeSendAudio(pcm16.buffer)
-        } catch (error) {
-          console.error('Failed to send audio:', error)
-        }
-      }
-
-      console.log('Connecting audio nodes...')
-      source.connect(processor)
-      processor.connect(audioContext.destination)
-      console.log('Audio pipeline connected')
-
-      setIsRecording(true)
-      setTranscription('')
-
-      console.log('Microphone connected, streaming audio...')
-    } catch (error) {
-      console.error('Recording error:', error)
-      setStatus(`Error: ${(error as Error).message}`)
-      stopLiveTranscription()
-    }
-  }
-
-  const stopLiveTranscription = async () => {
-    try {
-      console.log('Stopping live transcription...')
-
-      // Stop audio processing
-      if (processorRef.current) {
-        if ('port' in processorRef.current) {
-          // AudioWorkletNode
-          processorRef.current.disconnect()
-        } else {
-          // ScriptProcessorNode
-          const processor = processorRef.current as any
-          processor.onaudioprocess = null
-          processor.disconnect()
-        }
-        processorRef.current = null
-      }
-
-      if (audioContextRef.current) {
-        await audioContextRef.current.close()
-        audioContextRef.current = null
-      }
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop())
-        streamRef.current = null
-      }
-
-      // Stop realtime session
-      const electronAPI = (window as any).electronAPI
-      if (electronAPI) {
-        await electronAPI.realtimeStop()
-      }
-
-      setIsRecording(false)
-      setIsSpeaking(false)
-      setAudioLevel(0)
-      setStatus('Live transcription stopped')
-
-      console.log('Stopped successfully')
-    } catch (error) {
-      console.error('Stop error:', error)
-      setStatus(`Error stopping: ${(error as Error).message}`)
-    }
-  }
 
   const startConversation = async () => {
     if (isInitializing || conversationActive) {
@@ -332,34 +136,16 @@ function App() {
 
     try {
       setIsInitializing(true)
-      console.log('Starting full voice conversation...')
-
-      const electronAPI = (window as any).electronAPI
-
-      // First start the STT session
-      await startLiveTranscription()
-
-      // Wait a bit for STT to be ready
-      await new Promise(resolve => setTimeout(resolve, 2000))
-
-      // Start conversation orchestrator
-      const result = await electronAPI.conversationStart({
-        mode: 'single-turn',
-        systemPrompt: 'You are a helpful voice assistant. Provide clear, concise, and friendly responses suitable for voice conversation.'
-      })
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to start conversation')
-      }
+      console.log('Starting simple voice conversation (non-realtime)...')
 
       setConversationActive(true)
       setConversationHistory([])
+      setConversationState('idle')
       setStatus('Ready - Click microphone to speak')
-      console.log('Conversation started successfully')
+      console.log('Conversation ready - using standard Whisper + GPT-4 + TTS')
     } catch (error) {
       console.error('Conversation start error:', error)
       setStatus(`Error: ${(error as Error).message}`)
-      stopLiveTranscription()
     } finally {
       setIsInitializing(false)
     }
@@ -369,14 +155,15 @@ function App() {
     try {
       console.log('Stopping voice conversation...')
 
-      const electronAPI = (window as any).electronAPI
-      await electronAPI.conversationStop()
-
-      // Stop STT session
-      await stopLiveTranscription()
+      // Stop any ongoing recording
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop())
+        streamRef.current = null
+      }
 
       setConversationActive(false)
       setConversationState('idle')
+      setIsRecording(false)
       setStatus('Voice conversation stopped')
       console.log('Conversation stopped successfully')
     } catch (error) {
@@ -387,50 +174,276 @@ function App() {
 
   const startManualRecording = async () => {
     try {
-      console.log('Starting manual 7-second recording...')
+      console.log('Starting 5-second recording with optimized approach...')
+      setConversationState('listening')
+      setStatus('Recording for 5 seconds - Speak now!')
 
-      const electronAPI = (window as any).electronAPI
-      const result = await electronAPI.conversationStartRecording()
-
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to start recording')
+      // Request microphone access with specific constraints
+      const constraints: MediaStreamConstraints = {
+        audio: selectedMicId ? {
+          deviceId: { exact: selectedMicId },
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: true,
+          sampleRate: 48000
+        } : {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: true,
+          sampleRate: 48000
+        }
       }
 
-      setStatus('Recording for 7 seconds - Speak now!')
-      console.log('Manual recording started successfully')
-    } catch (error) {
-      console.error('Manual recording start error:', error)
-      setStatus(`Error: ${(error as Error).message}`)
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
+      streamRef.current = stream
+
+      // Log audio track info for debugging
+      const audioTrack = stream.getAudioTracks()[0]
+      console.log(' Microphone stream obtained')
+      console.log(' Audio track settings:', audioTrack.getSettings())
+      console.log(' Audio track label:', audioTrack.label)
+      console.log(' Audio track enabled:', audioTrack.enabled)
+      console.log(' Audio track muted:', audioTrack.muted)
+      console.log(' Audio track ready state:', audioTrack.readyState)
+
+      // Check if the track is actually active
+      if (audioTrack.readyState !== 'live') {
+        throw new Error(' Microphone track is not live. Please check your microphone connection.')
+      }
+
+      if (audioTrack.muted) {
+        console.warn(' WARNING: Microphone track is muted!')
+      }
+
+      // Set up audio visualization to monitor levels
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext()
+      }
+
+      // Resume audio context if suspended (required by browser security)
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume()
+        console.log(' Audio context resumed')
+      }
+
+      console.log(' Audio context state:', audioContextRef.current.state)
+
+      analyserRef.current = audioContextRef.current.createAnalyser()
+      analyserRef.current.fftSize = 2048
+      analyserRef.current.smoothingTimeConstant = 0.3
+
+      const source = audioContextRef.current.createMediaStreamSource(stream)
+      source.connect(analyserRef.current)
+      console.log(' Audio source connected to analyser')
+
+      const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount)
+      const timeDomainData = new Uint8Array(analyserRef.current.fftSize)
+
+      // Monitor audio level during recording
+      let levelInterval: ReturnType<typeof setInterval> | null = null
+      let maxAudioLevel = 0
+      const checkAudioLevel = () => {
+        if (analyserRef.current) {
+          // Check both frequency and time domain data
+          analyserRef.current.getByteFrequencyData(frequencyData)
+          analyserRef.current.getByteTimeDomainData(timeDomainData)
+
+          const frequencyAvg = frequencyData.reduce((a, b) => a + b) / frequencyData.length
+
+          // Calculate RMS (Root Mean Square) from time domain for better accuracy
+          let sum = 0
+          for (let i = 0; i < timeDomainData.length; i++) {
+            const normalized = (timeDomainData[i] - 128) / 128
+            sum += normalized * normalized
+          }
+          const rms = Math.sqrt(sum / timeDomainData.length)
+          const rmsLevel = Math.round(rms * 100)
+
+          const roundedLevel = Math.max(Math.round(frequencyAvg), rmsLevel)
+          setAudioLevel(roundedLevel)
+          if (roundedLevel > maxAudioLevel) {
+            maxAudioLevel = roundedLevel
+          }
+          console.log('🎤 Audio level:', roundedLevel, '(freq:', Math.round(frequencyAvg), 'rms:', rmsLevel + ') | Max:', maxAudioLevel)
+        }
+      }
+
+      levelInterval = setInterval(checkAudioLevel, 100)
+      console.log('✅ Audio monitoring started - Speak now!')
+
+      // Wait 500ms before starting recording
+      await new Promise(resolve => setTimeout(resolve, 500))
+      console.log('Audio monitoring active, max level so far:', maxAudioLevel)
+
+      // Create MediaRecorder with specific options
+      const options = { mimeType: 'audio/webm;codecs=opus' }
+      const mediaRecorder = new MediaRecorder(stream, options)
+      const audioChunks: Blob[] = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        console.log('Data available, size:', event.data.size)
+        if (event.data.size > 0) {
+          audioChunks.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstop = async () => {
+        console.log('Recording stopped, processing...')
+        console.log('Total chunks collected:', audioChunks.length)
+        setConversationState('transcribing')
+        setStatus('Processing speech...')
+
+        try {
+          // Create audio blob
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' })
+          const audioBuffer = await audioBlob.arrayBuffer()
+
+          console.log('Audio recorded, size:', audioBuffer.byteLength, 'bytes')
+          console.log('Audio blob size:', audioBlob.size, 'bytes')
+          console.log('Max audio level during recording:', maxAudioLevel)
+
+          if (maxAudioLevel === 0) {
+            console.warn('⚠️ Warning: Audio level was 0 during recording. Microphone may be muted in Windows.')
+            console.warn('⚠️ If transcription is incorrect, check Windows Sound Settings > Input volume')
+          }
+
+          const electronAPI = (window as any).electronAPI
+
+          // Step 1: Transcribe with Groq Whisper (with retry)
+          setStatus('Transcribing speech... (this may take a moment)')
+          const transcriptResult = await electronAPI.groqSaveAndTranscribe(audioBuffer)
+          if (!transcriptResult.success || !transcriptResult.text) {
+            const errorMsg = transcriptResult.error || 'Transcription failed'
+
+            // Check if it's a rate limit error
+            if (errorMsg.includes('rate limit') || errorMsg.includes('429')) {
+              throw new Error('⚠️ Groq rate limit reached. Please wait a moment and try again.')
+            }
+
+            throw new Error(errorMsg)
+          }
+
+          const userText = transcriptResult.text.trim()
+          console.log('📝 Transcription received:', userText)
+          console.log('📝 Transcription length:', userText.length, 'characters')
+
+          if (!userText || userText.length < 2) {
+            console.warn('⚠️ Warning: Transcription is very short or empty')
+          }
+
+          setConversationHistory(prev => [...prev, { type: 'user', text: userText, timestamp: Date.now() }])
+
+          // Step 2: Get GPT-4 response
+          setConversationState('ai_thinking')
+          setStatus('AI is thinking...')
+          const chatResult = await electronAPI.chatSendMessage(userText)
+          if (!chatResult.success || !chatResult.response) {
+            throw new Error(chatResult.error || 'Failed to get AI response')
+          }
+
+          const aiResponse = chatResult.response
+          console.log('AI response:', aiResponse)
+          setConversationHistory(prev => [...prev, { type: 'ai', text: aiResponse, timestamp: Date.now() }])
+
+          // Step 3: Generate speech with TTS
+          setConversationState('tts_generating')
+          setStatus('Generating voice...')
+          const ttsResult = await electronAPI.ttsSynthesize(aiResponse)
+          if (!ttsResult.success || !ttsResult.audio) {
+            throw new Error(ttsResult.error || 'TTS failed')
+          }
+
+          // Step 4: Play audio
+          setConversationState('ai_speaking')
+          setStatus('AI is speaking...')
+          await playAIAudio(ttsResult.audio)
+
+          // Done
+          setConversationState('idle')
+          setStatus('Ready - Click microphone to speak again')
+          console.log('Turn complete')
+        } catch (error: any) {
+          console.error('Processing error:', error)
+          setStatus(`Error: ${error.message}`)
+          setConversationState('idle')
+        } finally {
+          // Clean up interval
+          if (levelInterval) {
+            clearInterval(levelInterval)
+            console.log('🛑 Audio monitoring stopped')
+          }
+          // Clean up stream
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop())
+            streamRef.current = null
+          }
+          setAudioLevel(0)
+        }
+      }
+
+      // Start recording with timeslice to collect data chunks
+      mediaRecorder.start(100) // Collect data every 100ms
+      setIsRecording(true)
+      console.log('Recording started with state:', mediaRecorder.state)
+
+      // Stop after 5 seconds
+      setTimeout(() => {
+        console.log('Timeout reached, stopping recording. State:', mediaRecorder.state)
+        if (levelInterval) {
+          clearInterval(levelInterval)
+          console.log('🛑 Audio monitoring stopped (timeout)')
+        }
+        if (mediaRecorder.state === 'recording') {
+          mediaRecorder.stop()
+          setIsRecording(false)
+        }
+      }, 5000)
+
+      console.log('Recording initiated')
+    } catch (error: any) {
+      console.error('Recording error:', error)
+      setStatus(`Error: ${error.message}`)
+      setConversationState('idle')
     }
   }
 
-  const playAIAudio = async (audioBuffer: ArrayBuffer) => {
-    try {
-      // Create blob from buffer (Inworld TTS returns MP3 format)
-      const blob = new Blob([audioBuffer], { type: 'audio/mpeg' })
-      const audioUrl = URL.createObjectURL(blob)
+  const playAIAudio = async (audioBuffer: ArrayBuffer): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      try {
+        // Create blob from buffer (Inworld TTS returns MP3 format)
+        const blob = new Blob([audioBuffer], { type: 'audio/mpeg' })
+        const audioUrl = URL.createObjectURL(blob)
 
-      // Create or reuse audio element
-      if (!audioPlayerRef.current) {
-        audioPlayerRef.current = new Audio()
+        // Create or reuse audio element
+        if (!audioPlayerRef.current) {
+          audioPlayerRef.current = new Audio()
+        }
+
+        const audio = audioPlayerRef.current
+        audio.src = audioUrl
+        audio.volume = 1.0
+
+        // Set up event handlers
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl)
+          console.log('AI audio playback finished')
+          resolve()
+        }
+
+        audio.onerror = (error) => {
+          URL.revokeObjectURL(audioUrl)
+          console.error('Audio playback error:', error)
+          reject(error)
+        }
+
+        // Play audio
+        audio.play()
+        console.log('Playing AI audio response')
+      } catch (error) {
+        console.error('Audio playback error:', error)
+        reject(error)
       }
-
-      const audio = audioPlayerRef.current
-      audio.src = audioUrl
-      audio.volume = 1.0
-
-      // Play audio
-      await audio.play()
-      console.log('Playing AI audio response')
-
-      // Clean up URL after playback
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl)
-        console.log('AI audio playback finished')
-      }
-    } catch (error) {
-      console.error('Audio playback error:', error)
-    }
+    })
   }
 
 
@@ -478,6 +491,71 @@ function App() {
         width: '100%',
         textAlign: 'center'
       }}>
+        {/* Microphone Selector */}
+        <div style={{ marginBottom: '20px' }}>
+          <label style={{ fontSize: '14px', color: '#666', display: 'block', marginBottom: '8px' }}>
+            Select Microphone:
+          </label>
+          <select
+            value={selectedMicId}
+            onChange={(e) => setSelectedMicId(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '10px',
+              borderRadius: '8px',
+              border: '1px solid #ddd',
+              fontSize: '14px',
+              cursor: 'pointer',
+              marginBottom: '10px'
+            }}
+          >
+            {availableMics.map(mic => (
+              <option key={mic.deviceId} value={mic.deviceId}>
+                {mic.label || `Microphone ${mic.deviceId.slice(0, 8)}`}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={testMicrophone}
+            style={{
+              width: '100%',
+              padding: '8px',
+              backgroundColor: '#2196F3',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '13px',
+              cursor: 'pointer',
+              fontWeight: '500'
+            }}
+          >
+            🧪 Test Microphone (3 sec)
+          </button>
+        </div>
+
+        {/* Audio Level Indicator */}
+        {conversationState === 'listening' && (
+          <div style={{ marginBottom: '20px' }}>
+            <div style={{ fontSize: '12px', color: '#666', marginBottom: '5px' }}>
+              Audio Level: {audioLevel > 10 ? '🔊' : '🔇'} {audioLevel}
+            </div>
+            <div style={{
+              width: '100%',
+              height: '8px',
+              backgroundColor: '#eee',
+              borderRadius: '4px',
+              overflow: 'hidden'
+            }}>
+              <div style={{
+                width: `${Math.min(audioLevel * 2, 100)}%`,
+                height: '100%',
+                backgroundColor: audioLevel > 10 ? '#4CAF50' : '#f44336',
+                transition: 'width 0.1s'
+              }} />
+            </div>
+          </div>
+        )}
+
         {/* Status Indicator */}
         <div style={{
           marginBottom: '30px',
@@ -486,15 +564,15 @@ function App() {
           fontWeight: '600',
           minHeight: '28px'
         }}>
-          {!openaiStatus?.initialized && '⚠️ Setting up...'}
-          {openaiStatus?.initialized && isInitializing && '🔄 Initializing...'}
-          {openaiStatus?.initialized && !isInitializing && !conversationActive && '👆 Click to start'}
+          {!openaiStatus?.initialized && ' Setting up...'}
+          {openaiStatus?.initialized && isInitializing && ' Initializing...'}
+          {openaiStatus?.initialized && !isInitializing && !conversationActive && ' Click to start'}
           {openaiStatus?.initialized && !isInitializing && conversationActive && conversationState === 'idle' && '🎤 Click to record'}
-          {conversationState === 'listening' && '🔴 Recording... (7 seconds)'}
+          {conversationState === 'listening' && ' Recording... (5 seconds)'}
           {conversationState === 'transcribing' && ' Processing speech...'}
           {conversationState === 'ai_thinking' && ' AI thinking...'}
-          {conversationState === 'tts_generating' && ' Creating voice...'}
-          {conversationState === 'ai_speaking' && ' AI speaking...'}
+          {conversationState === 'tts_generating' && ' TTS'}
+          {conversationState === 'ai_speaking' && ' AI responding...'}
         </div>
 
         {/* Main Button */}

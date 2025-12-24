@@ -1,11 +1,6 @@
-/**
- * OpenAI GPT-4o Chat Integration
- *
- * This module manages conversations with GPT-4o, maintaining
- * conversation history for context-aware responses.
- */
 
-import type OpenAI from 'openai'
+
+import Groq from 'groq-sdk'
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -21,22 +16,20 @@ interface ChatConfig {
   maxHistoryLength?: number
 }
 
-class ConversationManager {
-  private openai: OpenAI | null = null
+class GroqConversationManager {
+  private groq: Groq | null = null
   private conversationHistory: ChatMessage[] = []
   private config: ChatConfig = {
     systemPrompt: 'You are a helpful voice assistant. Provide clear, concise, and friendly responses.',
-    model: 'gpt-4o',
+    model: 'llama-3.3-70b-versatile',
     temperature: 0.7,
     maxTokens: 1000,
     maxHistoryLength: 20
   }
 
-  /**
-   * Initialize chat with OpenAI client
-   */
-  initialize(openai: OpenAI, config?: Partial<ChatConfig>): void {
-    this.openai = openai
+
+  initialize(groq: Groq, config?: Partial<ChatConfig>): void {
+    this.groq = groq
     if (config) {
       this.config = { ...this.config, ...config }
     }
@@ -48,7 +41,7 @@ class ConversationManager {
       timestamp: Date.now()
     }]
 
-    console.log('Chat manager initialized with GPT-4o')
+    console.log('Groq chat manager initialized with', this.config.model)
     console.log('System prompt:', this.config.systemPrompt)
   }
 
@@ -56,15 +49,15 @@ class ConversationManager {
    * Check if chat is initialized
    */
   isInitialized(): boolean {
-    return this.openai !== null
+    return this.groq !== null
   }
 
   /**
    * Send a message and get AI response
    */
   async sendMessage(userMessage: string): Promise<string> {
-    if (!this.openai) {
-      throw new Error('Chat not initialized. Please call initialize first.')
+    if (!this.groq) {
+      throw new Error('Groq chat not initialized. Please call initialize first.')
     }
 
     try {
@@ -81,17 +74,17 @@ class ConversationManager {
       // Trim history if it exceeds max length (keep system prompt)
       this.trimHistory()
 
-      // Prepare messages for API (convert our format to OpenAI format)
+      // Prepare messages for API
       const messages = this.conversationHistory.map(msg => ({
         role: msg.role,
         content: msg.content
       }))
 
-      console.log('Sending to GPT-4o:', this.config.model)
+      console.log('Sending to Groq:', this.config.model)
       console.log('Messages count:', messages.length)
 
-      // Call OpenAI API
-      const completion = await this.openai.chat.completions.create({
+      // Call Groq API
+      const completion = await this.groq.chat.completions.create({
         model: this.config.model!,
         messages: messages as any,
         temperature: this.config.temperature,
@@ -112,12 +105,12 @@ class ConversationManager {
 
       return assistantResponse
     } catch (error: any) {
-      console.error('GPT-4o chat error:', error)
+      console.error('Groq chat error:', error)
 
       if (error.status === 401) {
-        throw new Error('Invalid OpenAI API key. Please check your .env file.')
+        throw new Error('Invalid Groq API key. Please check your .env file.')
       } else if (error.status === 429) {
-        throw new Error('OpenAI API rate limit exceeded. Please try again later.')
+        throw new Error('Groq API rate limit exceeded. Please try again in a moment.')
       } else if (error.status === 400) {
         throw new Error(`Invalid request: ${error.message}`)
       } else if (error.code === 'context_length_exceeded') {
@@ -224,21 +217,21 @@ class ConversationManager {
 }
 
 // Export singleton instance
-let conversationManager: ConversationManager | null = null
+let groqConversationManager: GroqConversationManager | null = null
 
-export function getConversationManager(): ConversationManager {
-  if (!conversationManager) {
-    conversationManager = new ConversationManager()
+export function getGroqConversationManager(): GroqConversationManager {
+  if (!groqConversationManager) {
+    groqConversationManager = new GroqConversationManager()
   }
-  return conversationManager
+  return groqConversationManager
 }
 
-export function createConversationManager(openai: OpenAI, config?: Partial<ChatConfig>): ConversationManager {
-  conversationManager = new ConversationManager()
-  conversationManager.initialize(openai, config)
-  return conversationManager
+export function createGroqConversationManager(groq: Groq, config?: Partial<ChatConfig>): GroqConversationManager {
+  groqConversationManager = new GroqConversationManager()
+  groqConversationManager.initialize(groq, config)
+  return groqConversationManager
 }
 
-export function resetConversationManager(): void {
-  conversationManager = null
+export function resetGroqConversationManager(): void {
+  groqConversationManager = null
 }

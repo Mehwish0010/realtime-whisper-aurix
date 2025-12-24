@@ -1,33 +1,33 @@
-import OpenAI from 'openai'
+import Groq from 'groq-sdk'
 import fs from 'fs'
 import path from 'path'
 
-let openai: OpenAI | null = null
+let groq: Groq | null = null
 
 /**
- * Initialize OpenAI client with API key
+ * Initialize Groq client with API key
  */
-export function initializeOpenAI(apiKey: string): void {
-  if (!apiKey || apiKey === 'your-api-key-here') {
-    throw new Error('Please set a valid OPENAI_API_KEY in your .env file')
+export function initializeGroq(apiKey: string): void {
+  if (!apiKey || apiKey === 'your-groq-api-key-here') {
+    throw new Error('Please set a valid GROQ_API_KEY in your .env file')
   }
 
-  openai = new OpenAI({
+  groq = new Groq({
     apiKey: apiKey
   })
 
-  console.log('OpenAI client initialized successfully')
+  console.log('Groq client initialized successfully')
 }
 
 /**
- * Check if OpenAI is initialized
+ * Check if Groq is initialized
  */
 export function isInitialized(): boolean {
-  return openai !== null
+  return groq !== null
 }
 
 /**
- * Transcribe audio file using OpenAI Whisper API with retry logic
+ * Transcribe audio file using Groq Whisper API with retry logic
  * @param audioPath - Path to the audio file (supports mp3, mp4, mpeg, mpga, m4a, wav, webm)
  * @param language - Language code (optional, auto-detect if not provided)
  * @returns Transcription text
@@ -36,8 +36,8 @@ export async function transcribeAudio(
   audioPath: string,
   language?: string
 ): Promise<string> {
-  if (!openai) {
-    throw new Error('OpenAI client not initialized. Please call initializeOpenAI first.')
+  if (!groq) {
+    throw new Error('Groq client not initialized. Please call initializeGroq first.')
   }
 
   const maxRetries = 3
@@ -45,7 +45,7 @@ export async function transcribeAudio(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`Starting OpenAI transcription (attempt ${attempt}/${maxRetries}) for:`, audioPath)
+      console.log(`Starting Groq Whisper transcription (attempt ${attempt}/${maxRetries}) for:`, audioPath)
 
       // Check if file exists
       if (!fs.existsSync(audioPath)) {
@@ -68,16 +68,17 @@ export async function transcribeAudio(
       // Create a read stream for the audio file
       const audioStream = fs.createReadStream(audioPath)
 
-      console.log('Calling OpenAI Whisper API...')
-      console.log('Parameters: model=whisper-1, language=en, temperature=0.0')
+      console.log('Calling Groq Whisper API...')
+      console.log('Parameters: model=whisper-large-v3-turbo, language=en, temperature=0.0')
 
-      // Call OpenAI Whisper API with enhanced parameters
-      const transcription = await openai.audio.transcriptions.create({
-        file: audioStream,
-        model: 'whisper-1',
-        language: language || 'en',
+      // Call Groq Whisper API with FORCED English language and strong prompt
+      const transcription = await groq.audio.transcriptions.create({
+        file: audioStream as any,
+        model: 'whisper-large-v3-turbo',
+        language: 'en',  // FORCE English - do not auto-detect
         response_format: 'text',
-        temperature: 0.0
+        temperature: 0.0,
+        prompt: 'The following is a conversation in English. Hello, how are you? Yes, I am speaking English. What can I help you with today?'
       })
 
       console.log('Transcription successful!')
@@ -90,11 +91,11 @@ export async function transcribeAudio(
 
       return transcription || 'No speech detected'
     } catch (error: any) {
-      console.error(`OpenAI transcription error (attempt ${attempt}/${maxRetries}):`, error)
+      console.error(`Groq transcription error (attempt ${attempt}/${maxRetries}):`, error)
       lastError = error
 
-      if (error.status === 401) {
-        throw new Error('Invalid OpenAI API key. Please check your .env file.')
+      if (error.status === 401 || error.error?.error?.code === 'invalid_api_key') {
+        throw new Error('Invalid Groq API key. Please check your .env file.')
       } else if (error.status === 429) {
         // Rate limit - retry with exponential backoff
         if (attempt < maxRetries) {
@@ -103,8 +104,8 @@ export async function transcribeAudio(
           await new Promise(resolve => setTimeout(resolve, waitTime))
           continue
         }
-        throw new Error('OpenAI API rate limit exceeded. Your account has reached its usage limit. Please wait or add credits at https://platform.openai.com/usage')
-      } else if (error.status === 500) {
+        throw new Error('Groq API rate limit exceeded. Please wait a moment and try again.')
+      } else if (error.status === 500 || error.status === 503) {
         // Server error - retry
         if (attempt < maxRetries) {
           const waitTime = 2000
@@ -112,7 +113,7 @@ export async function transcribeAudio(
           await new Promise(resolve => setTimeout(resolve, waitTime))
           continue
         }
-        throw new Error('OpenAI API server error. Please try again later.')
+        throw new Error('Groq API server error. Please try again later.')
       }
 
       throw new Error(`Transcription failed: ${error.message}`)
@@ -137,12 +138,12 @@ export async function transcribeWithOptions(
     temperature?: number
   }
 ): Promise<{ text: string; language?: string }> {
-  if (!openai) {
-    throw new Error('OpenAI client not initialized. Please call initializeOpenAI first.')
+  if (!groq) {
+    throw new Error('Groq client not initialized. Please call initializeGroq first.')
   }
 
   try {
-    console.log('Starting OpenAI transcription with options:', options)
+    console.log('Starting Groq transcription with options:', options)
 
     // Check if file exists
     if (!fs.existsSync(audioPath)) {
@@ -152,12 +153,12 @@ export async function transcribeWithOptions(
     // Create a read stream for the audio file
     const audioStream = fs.createReadStream(audioPath)
 
-    // Call OpenAI Whisper API with verbose response
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioStream,
-      model: 'whisper-1',
-      language: options?.language,
-      prompt: options?.prompt,
+    // Call Groq Whisper API with verbose response - FORCE English
+    const transcription = await groq.audio.transcriptions.create({
+      file: audioStream as any,
+      model: 'whisper-large-v3-turbo',
+      language: 'en',  // FORCE English
+      prompt: options?.prompt || 'The following is a conversation in English. Hello, how are you? Yes, I am speaking English.',
       temperature: options?.temperature || 0,
       response_format: 'verbose_json'
     })
@@ -165,16 +166,16 @@ export async function transcribeWithOptions(
     console.log('Transcription successful:', transcription)
 
     return {
-      text: transcription.text || 'No speech detected',
+      text: (transcription as any).text || 'No speech detected',
       language: (transcription as any).language
     }
   } catch (error: any) {
-    console.error('OpenAI transcription error:', error)
+    console.error('Groq transcription error:', error)
 
-    if (error.status === 401) {
-      throw new Error('Invalid OpenAI API key. Please check your .env file.')
+    if (error.status === 401 || error.error?.error?.code === 'invalid_api_key') {
+      throw new Error('Invalid Groq API key. Please check your .env file.')
     } else if (error.status === 429) {
-      throw new Error('OpenAI API rate limit exceeded. Please try again later.')
+      throw new Error('Groq API rate limit exceeded. Please try again later.')
     }
 
     throw new Error(`Transcription failed: ${error.message}`)
@@ -182,11 +183,11 @@ export async function transcribeWithOptions(
 }
 
 /**
- * Get OpenAI API status
+ * Get Groq API status
  */
 export function getStatus(): { initialized: boolean; apiKey: string | null } {
   return {
-    initialized: openai !== null,
-    apiKey: openai ? 'Set (hidden)' : null
+    initialized: groq !== null,
+    apiKey: groq ? 'Set (hidden)' : null
   }
 }

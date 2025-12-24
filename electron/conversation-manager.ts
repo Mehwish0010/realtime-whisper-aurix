@@ -1,9 +1,4 @@
-/**
- * Conversation Orchestrator
- *
- * Coordinates the complete voice-to-voice conversation flow:
- * User speaks → STT → GPT-4 → TTS → Audio playback
- */
+
 
 import { EventEmitter } from 'events'
 import type { RealtimeSession } from './openai-realtime'
@@ -41,7 +36,7 @@ export class ConversationOrchestrator extends EventEmitter {
   private lastTranscription: string = ''
   private transcriptionTimeout: NodeJS.Timeout | null = null
   private speechStartTime: number = 0
-  private speechCollectionDuration: number = 7000  // Collect speech for exactly 7 seconds, then mic OFF
+  private speechCollectionDuration: number = 3000  // Collect speech for exactly 3 seconds, then mic OFF
   private speechCollectionTimer: NodeJS.Timeout | null = null
   private isCollectingSpeech: boolean = false  // Flag to prevent multiple simultaneous collections
 
@@ -161,7 +156,7 @@ export class ConversationOrchestrator extends EventEmitter {
       const elapsedTime = Date.now() - this.speechStartTime
       const remainingTime = Math.max(0, this.speechCollectionDuration - elapsedTime)
 
-      console.log(`📝 Transcription: "${text}" | ⏱️ ${(elapsedTime/1000).toFixed(1)}s / 7s | 🎤 Mic turns off in ${(remainingTime/1000).toFixed(1)}s`)
+      console.log(`📝 Transcription: "${text}" | ⏱️ ${(elapsedTime/1000).toFixed(1)}s / 3s | 🎤 Mic turns off in ${(remainingTime/1000).toFixed(1)}s`)
     })
 
     // Handle errors
@@ -257,7 +252,7 @@ export class ConversationOrchestrator extends EventEmitter {
   }
 
   /**
-   * Generate AI response using GPT-4
+   * Generate AI response using GPT-4o
    */
   private async generateAIResponse(userMessage: string): Promise<string> {
     const chatManager = getConversationManager()
@@ -266,7 +261,7 @@ export class ConversationOrchestrator extends EventEmitter {
       const response = await chatManager.sendMessage(userMessage)
       return response
     } catch (error: any) {
-      console.error('GPT-4 response error:', error)
+      console.error('GPT-4o response error:', error)
       throw new Error(`Failed to generate AI response: ${error.message}`)
     }
   }
@@ -315,7 +310,7 @@ export class ConversationOrchestrator extends EventEmitter {
    */
   private estimateAudioDuration(text: string): number {
     const wordCount = text.split(/\s+/).length
-    const estimatedSeconds = (wordCount / 2.5) + 1  // Add 1 second buffer
+    const estimatedSeconds = (wordCount / 2.5) + 0.3  // Add minimal buffer
     return estimatedSeconds * 1000  // Convert to milliseconds
   }
 
@@ -334,7 +329,7 @@ export class ConversationOrchestrator extends EventEmitter {
     this.lastTranscription = ''  // Clear previous transcription
     this.setState('listening')
     this.emit('user_speaking')
-    console.log(`🎤 Microphone ON - Recording for ${this.speechCollectionDuration}ms (7 seconds)...`)
+    console.log(`🎤 Microphone ON - Recording for ${this.speechCollectionDuration}ms (3 seconds)...`)
 
     // Set timer to automatically stop listening and process after 7 seconds
     if (this.speechCollectionTimer) {
@@ -342,7 +337,7 @@ export class ConversationOrchestrator extends EventEmitter {
     }
 
     this.speechCollectionTimer = setTimeout(async () => {
-      console.log('🔇 7 seconds elapsed - Microphone OFF, processing speech...')
+      console.log('🔇 3 seconds elapsed - Microphone OFF, processing speech...')
       this.setState('transcribing')
 
       // Clear any pending transcription timeout
@@ -351,9 +346,9 @@ export class ConversationOrchestrator extends EventEmitter {
         this.transcriptionTimeout = null
       }
 
-      // Wait up to 3 more seconds for transcription to arrive
+      // Wait up to 1 second for transcription to arrive
       let attempts = 0
-      const maxAttempts = 30 // 30 * 100ms = 3 seconds
+      const maxAttempts = 10 // 10 * 100ms = 1 second
 
       while (attempts < maxAttempts && (!this.lastTranscription || this.lastTranscription.trim().length === 0)) {
         await this.wait(100)
@@ -362,10 +357,10 @@ export class ConversationOrchestrator extends EventEmitter {
 
       // Process whatever we collected
       if (this.lastTranscription && this.lastTranscription.trim().length > 0) {
-        console.log('✅ Transcription received, processing...')
+        console.log('Transcription received, processing...')
         await this.handleUserTranscription(this.lastTranscription)
       } else {
-        console.log('⚠️ No speech collected after waiting, returning to idle...')
+        console.log(' No speech collected after waiting, returning to idle...')
         this.isCollectingSpeech = false  // Reset flag if no speech collected
         this.setState('idle')
         this.emit('no_speech_detected')

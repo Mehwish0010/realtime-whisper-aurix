@@ -6,6 +6,11 @@ export interface ElectronAPI {
   saveAndTranscribe: (audioBuffer: ArrayBuffer) => Promise<{ success: boolean; text?: string; error?: string }>
   openaiStatus: () => Promise<{ success: boolean; initialized: boolean; apiKey: string | null }>
 
+  // Groq transcription methods
+  groqTranscribeAudio: (audioPath: string) => Promise<{ success: boolean; text?: string; error?: string }>
+  groqSaveAndTranscribe: (audioBuffer: ArrayBuffer) => Promise<{ success: boolean; text?: string; error?: string }>
+  groqStatus: () => Promise<{ success: boolean; initialized: boolean; apiKey: string | null }>
+
   // Realtime streaming methods
   realtimeStart: () => Promise<{ success: boolean; message?: string; error?: string }>
   realtimeSendAudio: (audioBuffer: ArrayBuffer) => Promise<{ success: boolean; error?: string }>
@@ -18,6 +23,7 @@ export interface ElectronAPI {
   onRealtimeSpeechStarted: (callback: () => void) => void
   onRealtimeSpeechStopped: (callback: () => void) => void
   onRealtimeError: (callback: (error: string) => void) => void
+  onRealtimeRateLimit: (callback: (info: { retryCount: number; maxRetries: number; cooldownMs: number }) => void) => void
 
   // TTS methods
   ttsSynthesize: (text: string, options?: any) => Promise<{ success: boolean; audio?: ArrayBuffer; error?: string }>

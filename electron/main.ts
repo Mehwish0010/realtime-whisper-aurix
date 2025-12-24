@@ -3,10 +3,13 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
 import fs from 'fs/promises'
+import Groq from 'groq-sdk'
+import { initializeGroq, transcribeAudio as groqTranscribeAudio, isInitialized as isGroqInitialized, getStatus as getGroqStatus } from './groq-stt.js'
 import { initializeOpenAI, transcribeAudio, isInitialized, getStatus } from './openai-stt.js'
 import { createRealtimeSession, getRealtimeSession, disconnectRealtime } from './openai-realtime.js'
 import { initializeInworld, synthesizeSpeech, isInitialized as isTTSInitialized, getStatus as getTTSStatus } from './inworld-tts.js'
 import { createConversationManager, getConversationManager } from './openai-chat.js'
+import { createGroqConversationManager, getGroqConversationManager } from './groq-chat.js'
 import { getConversationOrchestrator } from './conversation-manager.js'
 import OpenAI from 'openai'
 
@@ -43,7 +46,7 @@ function createWindow() {
           "style-src 'self' 'unsafe-inline'; " +
           "img-src 'self' data: https:; " +
           "media-src 'self' blob: mediastream:; " +
-          "connect-src 'self' https://api.openai.com wss://api.openai.com https://api.inworld.ai; " +
+          "connect-src 'self' https://api.openai.com wss://api.openai.com https://api.groq.com https://api.inworld.ai; " +
           "font-src 'self'; " +
           "worker-src 'self' blob:;"
         ]
@@ -83,30 +86,50 @@ function createWindow() {
 
 // App lifecycle
 app.whenReady().then(() => {
-  // Initialize OpenAI first
+  // Initialize Groq (for both STT and Chat)
+  const groqApiKey = process.env.GROQ_API_KEY
+
+  if (!groqApiKey || groqApiKey === 'your-groq-api-key-here') {
+    console.warn('WARNING: GROQ_API_KEY not set in .env file')
+    console.warn('Groq Whisper STT and Chat will not be available')
+    console.warn('Get your API key from: https://console.groq.com/keys')
+  } else {
+    try {
+      // Initialize Groq STT
+      initializeGroq(groqApiKey)
+      console.log('Groq Whisper initialized successfully')
+
+      // Create Groq client for chat
+      const groqClient = new Groq({ apiKey: groqApiKey })
+
+      // Initialize Groq chat manager
+      createGroqConversationManager(groqClient, {
+        systemPrompt: 'You are a helpful voice assistant. Provide clear, concise, and friendly responses.',
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.7,
+        maxTokens: 1000
+      })
+      console.log('Groq chat manager initialized successfully')
+    } catch (error) {
+      console.error('Failed to initialize Groq:', error)
+    }
+  }
+
+  // Initialize OpenAI (optional - for realtime features)
   const apiKey = process.env.OPENAI_API_KEY
 
   let openaiClient: OpenAI | null = null
 
   if (!apiKey || apiKey === 'your-api-key-here') {
-    console.error('WARNING: OPENAI_API_KEY not set in .env file')
-    console.error('Please add your OpenAI API key to the .env file')
+    console.warn('WARNING: OPENAI_API_KEY not set in .env file')
+    console.warn('OpenAI realtime features will not be available')
   } else {
     try {
       initializeOpenAI(apiKey)
       console.log('OpenAI initialized successfully')
 
-      // Create OpenAI client for chat
+      // Create OpenAI client (for realtime features)
       openaiClient = new OpenAI({ apiKey })
-
-      // Initialize chat manager
-      createConversationManager(openaiClient, {
-        systemPrompt: 'You are a helpful voice assistant. Provide clear, concise, and friendly responses.',
-        model: 'gpt-4-turbo-preview',
-        temperature: 0.7,
-        maxTokens: 1000
-      })
-      console.log('Chat manager initialized successfully')
     } catch (error) {
       console.error('Failed to initialize OpenAI:', error)
     }
@@ -186,10 +209,19 @@ ipcMain.handle('openai-status', async () => {
   }
 })
 
-// Transcribe audio file
+// Check Groq status
+ipcMain.handle('groq-status', async () => {
+  const status = getGroqStatus()
+  return {
+    success: true,
+    ...status
+  }
+})
+
+// Transcribe audio file (OpenAI)
 ipcMain.handle('transcribe-audio', async (_event, audioPath: string) => {
   try {
-    console.log('Received transcription request for:', audioPath)
+    console.log('Received OpenAI transcription request for:', audioPath)
 
     if (!isInitialized()) {
       throw new Error('OpenAI not initialized. Please check your API key in .env file.')
@@ -210,7 +242,7 @@ ipcMain.handle('transcribe-audio', async (_event, audioPath: string) => {
       text: text
     }
   } catch (error: any) {
-    console.error('Transcription error:', error)
+    console.error('OpenAI transcription error:', error)
     return {
       success: false,
       error: error.message || 'Unknown error occurred'
@@ -218,10 +250,42 @@ ipcMain.handle('transcribe-audio', async (_event, audioPath: string) => {
   }
 })
 
-// Save audio buffer and transcribe
+// Transcribe audio file (Groq)
+ipcMain.handle('groq-transcribe-audio', async (_event, audioPath: string) => {
+  try {
+    console.log('Received Groq transcription request for:', audioPath)
+
+    if (!isGroqInitialized()) {
+      throw new Error('Groq not initialized. Please check your API key in .env file.')
+    }
+
+    const text = await groqTranscribeAudio(audioPath)
+
+    // Clean up the temp file after transcription
+    try {
+      await fs.unlink(audioPath)
+      console.log('Cleaned up temp file:', audioPath)
+    } catch (cleanupError) {
+      console.warn('Failed to clean up temp file:', cleanupError)
+    }
+
+    return {
+      success: true,
+      text: text
+    }
+  } catch (error: any) {
+    console.error('Groq transcription error:', error)
+    return {
+      success: false,
+      error: error.message || 'Unknown error occurred'
+    }
+  }
+})
+
+// Save audio buffer and transcribe (OpenAI)
 ipcMain.handle('save-and-transcribe', async (_event, audioBuffer: ArrayBuffer) => {
   try {
-    console.log('Received audio buffer, size:', audioBuffer.byteLength, 'bytes')
+    console.log('Received audio buffer for OpenAI, size:', audioBuffer.byteLength, 'bytes')
 
     if (!isInitialized()) {
       throw new Error('OpenAI not initialized. Please check your API key in .env file.')
@@ -249,7 +313,68 @@ ipcMain.handle('save-and-transcribe', async (_event, audioBuffer: ArrayBuffer) =
       text: text
     }
   } catch (error: any) {
-    console.error('Save and transcribe error:', error)
+    console.error('OpenAI save and transcribe error:', error)
+    return {
+      success: false,
+      error: error.message || 'Unknown error occurred'
+    }
+  }
+})
+
+// Save audio buffer and transcribe (Groq)
+ipcMain.handle('groq-save-and-transcribe', async (_event, audioBuffer: ArrayBuffer) => {
+  try {
+    console.log('Received audio buffer for Groq, size:', audioBuffer.byteLength, 'bytes')
+
+    if (!isGroqInitialized()) {
+      throw new Error('Groq not initialized. Please check your API key in .env file.')
+    }
+
+    // Validate audio buffer size
+    if (audioBuffer.byteLength < 1000) {
+      throw new Error('❌ Audio file too small. Recording may have failed. Please try again.')
+    }
+
+    if (audioBuffer.byteLength > 25 * 1024 * 1024) {
+      throw new Error('❌ Audio file too large (max 25MB). Please record shorter audio.')
+    }
+
+    console.log('✅ Audio buffer validated:', audioBuffer.byteLength, 'bytes')
+
+    // Save audio buffer to temp file
+    const timestamp = Date.now()
+    const filename = `recording_${timestamp}.webm`
+    const audioPath = await saveAudioFile(audioBuffer, filename)
+    console.log('Saved audio file to:', audioPath)
+
+    // Transcribe the audio
+    console.log('🎤 Starting Groq Whisper transcription...')
+    const text = await groqTranscribeAudio(audioPath)
+    console.log('📝 Transcription result:', text)
+    console.log('📝 Transcription length:', text.length, 'characters')
+
+    // Validate that transcription is in English (basic ASCII check)
+    const hasNonEnglish = /[^\x00-\x7F]/.test(text)
+    if (hasNonEnglish) {
+      console.warn('⚠️ WARNING: Transcription contains non-English characters!')
+      console.warn('⚠️ This usually means your audio quality is too low.')
+      console.warn('📝 Transcription:', text)
+    }
+
+    // Clean up the temp file
+    try {
+      await fs.unlink(audioPath)
+      console.log('Cleaned up temp file:', audioPath)
+    } catch (cleanupError) {
+      console.warn('Failed to clean up temp file:', cleanupError)
+    }
+
+    return {
+      success: true,
+      text: text
+    }
+  } catch (error: any) {
+    console.error('Groq save and transcribe error:', error)
     return {
       success: false,
       error: error.message || 'Unknown error occurred'
@@ -306,6 +431,13 @@ ipcMain.handle('realtime-start', async () => {
       console.error('Realtime error:', error)
       if (mainWindow) {
         mainWindow.webContents.send('realtime-error', error.message || 'Unknown error')
+      }
+    })
+
+    session.on('rate_limit', (info: any) => {
+      console.log('Rate limit event:', info)
+      if (mainWindow) {
+        mainWindow.webContents.send('realtime-rate-limit', info)
       }
     })
 
@@ -433,16 +565,16 @@ ipcMain.handle('tts-status', async () => {
   }
 })
 
-// Chat IPC Handlers
+// Chat IPC Handlers (using Groq)
 
 ipcMain.handle('chat-send-message', async (_event, message: string) => {
   try {
     console.log('Chat message received:', message)
 
-    const chatManager = getConversationManager()
+    const chatManager = getGroqConversationManager()
 
     if (!chatManager.isInitialized()) {
-      throw new Error('Chat manager not initialized.')
+      throw new Error('Groq chat manager not initialized.')
     }
 
     const response = await chatManager.sendMessage(message)
@@ -462,7 +594,7 @@ ipcMain.handle('chat-send-message', async (_event, message: string) => {
 
 ipcMain.handle('chat-clear-history', async () => {
   try {
-    const chatManager = getConversationManager()
+    const chatManager = getGroqConversationManager()
     chatManager.clearHistory()
 
     return {
@@ -479,7 +611,7 @@ ipcMain.handle('chat-clear-history', async () => {
 
 ipcMain.handle('chat-get-history', async () => {
   try {
-    const chatManager = getConversationManager()
+    const chatManager = getGroqConversationManager()
     const history = chatManager.getHistory()
 
     return {
@@ -497,7 +629,7 @@ ipcMain.handle('chat-get-history', async () => {
 
 ipcMain.handle('chat-set-system-prompt', async (_event, prompt: string) => {
   try {
-    const chatManager = getConversationManager()
+    const chatManager = getGroqConversationManager()
     chatManager.setSystemPrompt(prompt)
 
     return {

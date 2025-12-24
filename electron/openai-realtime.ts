@@ -19,6 +19,12 @@ export class RealtimeSession extends EventEmitter {
   private sessionId: string | null = null
   private speechStartTime: number | null = null
   private speechStopTime: number | null = null
+  private rateLimitRetryCount: number = 0
+  private maxRetries: number = 3
+  private isRateLimited: boolean = false
+  private rateLimitCooldown: NodeJS.Timeout | null = null
+  private lastAudioSendTime: number = 0
+  private minAudioSendInterval: number = 250 // Minimum 250ms between audio sends (reduced frequency)
 
   constructor(config: RealtimeConfig) {
     super()
@@ -58,9 +64,9 @@ export class RealtimeSession extends EventEmitter {
               },
               turn_detection: {
                 type: 'server_vad',
-                threshold: 0.3,
-                prefix_padding_ms: 300,
-                silence_duration_ms: 700
+                threshold: 0.6,
+                prefix_padding_ms: 150,
+                silence_duration_ms: 400
               },
               temperature: 0.6,
               max_response_output_tokens: 4096
@@ -127,7 +133,16 @@ export class RealtimeSession extends EventEmitter {
 
       case 'conversation.item.input_audio_transcription.failed':
         console.error('Transcription failed:', event.error)
-        this.emit('error', event.error)
+
+        // Check if it's a rate limit error - check message property and stringified version
+        const errorMsg = event.error?.message || ''
+        const errorString = typeof event.error === 'string' ? event.error : JSON.stringify(event.error)
+        if ((errorMsg && errorMsg.includes('429')) || (errorString && errorString.includes('429'))) {
+          console.warn('⚠️ Rate limit detected in transcription failure! Implementing cooldown...')
+          this.handleRateLimit()
+        } else {
+          this.emit('error', event.error)
+        }
         break
 
       case 'input_audio_buffer.speech_started':
@@ -170,6 +185,16 @@ export class RealtimeSession extends EventEmitter {
           // This is expected when there's silence - just ignore it
           break
         }
+
+        // Check for rate limit errors in general error events too
+        const errMsg = event.error?.message || ''
+        const errString = typeof event.error === 'string' ? event.error : JSON.stringify(event.error)
+        if ((errMsg && errMsg.includes('429')) || (errString && errString.includes('429'))) {
+          console.warn('⚠️ Rate limit detected in error event! Implementing cooldown...')
+          this.handleRateLimit()
+          break
+        }
+
         console.error('Server error:', event.error)
         this.emit('error', event.error)
         break
@@ -186,6 +211,19 @@ export class RealtimeSession extends EventEmitter {
       return
     }
 
+    // Skip if we're in rate limit cooldown
+    if (this.isRateLimited) {
+      // Silently drop audio during cooldown
+      return
+    }
+
+    // Throttle audio sends to prevent rate limiting
+    const now = Date.now()
+    if (now - this.lastAudioSendTime < this.minAudioSendInterval) {
+      // Skip this audio chunk to reduce frequency (throttling)
+      return
+    }
+
     try {
       // Convert to base64
       const base64Audio = audioData.toString('base64')
@@ -195,6 +233,8 @@ export class RealtimeSession extends EventEmitter {
         type: 'input_audio_buffer.append',
         audio: base64Audio
       })
+
+      this.lastAudioSendTime = now
     } catch (error) {
       console.error('Error sending audio:', error)
     }
@@ -235,6 +275,46 @@ export class RealtimeSession extends EventEmitter {
     }
   }
 
+  private handleRateLimit(): void {
+    // Don't stack rate limit handlers if already rate limited
+    if (this.isRateLimited) {
+      console.log('Already in rate limit cooldown, ignoring duplicate')
+      return
+    }
+
+    this.isRateLimited = true
+    this.rateLimitRetryCount++
+
+    // Calculate exponential backoff delay - start at 5 seconds
+    const backoffDelay = Math.min(Math.pow(2, this.rateLimitRetryCount) * 5000, 60000) // Start at 5s, max 60 seconds
+
+    console.log(`⚠️ RATE LIMIT HIT - Cooldown active for ${backoffDelay}ms (attempt ${this.rateLimitRetryCount}/${this.maxRetries})`)
+    console.log(`All audio will be dropped during cooldown period`)
+
+    // Emit user-friendly error
+    this.emit('rate_limit', {
+      retryCount: this.rateLimitRetryCount,
+      maxRetries: this.maxRetries,
+      cooldownMs: backoffDelay
+    })
+
+    // Clear any existing cooldown
+    if (this.rateLimitCooldown) {
+      clearTimeout(this.rateLimitCooldown)
+    }
+
+    // Set cooldown timer
+    this.rateLimitCooldown = setTimeout(() => {
+      this.isRateLimited = false
+      console.log('✅ Rate limit cooldown ended, resuming normal operation')
+
+      // Reset retry count if we've successfully waited
+      if (this.rateLimitRetryCount > 0) {
+        this.rateLimitRetryCount = 0
+      }
+    }, backoffDelay)
+  }
+
   disconnect(): void {
     if (this.ws) {
       console.log('Disconnecting from OpenAI Realtime API...')
@@ -242,6 +322,15 @@ export class RealtimeSession extends EventEmitter {
       this.ws = null
       this.isConnected = false
     }
+
+    // Clear rate limit cooldown
+    if (this.rateLimitCooldown) {
+      clearTimeout(this.rateLimitCooldown)
+      this.rateLimitCooldown = null
+    }
+
+    this.isRateLimited = false
+    this.rateLimitRetryCount = 0
   }
 
   getConnectionStatus(): boolean {

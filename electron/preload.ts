@@ -8,6 +8,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveAndTranscribe: (audioBuffer: ArrayBuffer) => ipcRenderer.invoke('save-and-transcribe', audioBuffer),
   openaiStatus: () => ipcRenderer.invoke('openai-status'),
 
+  // Groq transcription methods
+  groqTranscribeAudio: (audioPath: string) => ipcRenderer.invoke('groq-transcribe-audio', audioPath),
+  groqSaveAndTranscribe: (audioBuffer: ArrayBuffer) => ipcRenderer.invoke('groq-save-and-transcribe', audioBuffer),
+  groqStatus: () => ipcRenderer.invoke('groq-status'),
+
   // Realtime streaming methods
   realtimeStart: () => ipcRenderer.invoke('realtime-start'),
   realtimeSendAudio: (audioBuffer: ArrayBuffer) => ipcRenderer.invoke('realtime-send-audio', audioBuffer),
@@ -27,6 +32,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onRealtimeError: (callback: (error: string) => void) => {
     ipcRenderer.on('realtime-error', (_event: any, error: string) => callback(error))
+  },
+  onRealtimeRateLimit: (callback: (info: any) => void) => {
+    ipcRenderer.on('realtime-rate-limit', (_event: any, info: any) => callback(info))
   },
 
   // TTS methods
