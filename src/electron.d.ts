@@ -1,5 +1,13 @@
 // Type definitions for Electron API
 export interface ElectronAPI {
+  // Deepgram transcription methods
+  deepgramStatus: () => Promise<{ success: boolean; initialized: boolean; connected: boolean; avgLatency: number | null; error?: string }>
+  deepgramTranscribeAudio: (audioPath: string) => Promise<{ success: boolean; text?: string; confidence?: number; error?: string }>
+  deepgramSaveAndTranscribe: (audioBuffer: ArrayBuffer) => Promise<{ success: boolean; text?: string; confidence?: number; error?: string }>
+  deepgramSendAudio: (audioBuffer: ArrayBuffer) => Promise<{ success: boolean; error?: string }>
+  deepgramLiveStart: () => Promise<{ success: boolean; message?: string; error?: string }>
+  deepgramLiveStop: () => Promise<{ success: boolean; message?: string; error?: string }>
+
   // OpenAI transcription methods
   transcribeAudio: (audioPath: string) => Promise<{ success: boolean; text?: string; error?: string }>
   getTempPath: () => Promise<string>
@@ -50,6 +58,11 @@ export interface ElectronAPI {
   onConversationStopped: (callback: () => void) => void
   onConversationTurnComplete: (callback: () => void) => void
   onConversationNoSpeech: (callback: () => void) => void
+
+  // Deepgram event listeners
+  onDeepgramTranscript: (callback: (data: any) => void) => void
+  onDeepgramSpeechStarted: (callback: () => void) => void
+  onDeepgramSpeechEnded: (callback: () => void) => void
 }
 
 declare global {

@@ -2,6 +2,14 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 // Expose protected methods to renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Deepgram transcription methods
+  deepgramStatus: () => ipcRenderer.invoke('deepgram-status'),
+  deepgramTranscribeAudio: (audioPath: string) => ipcRenderer.invoke('deepgram-transcribe-audio', audioPath),
+  deepgramSaveAndTranscribe: (audioBuffer: ArrayBuffer) => ipcRenderer.invoke('deepgram-save-and-transcribe', audioBuffer),
+  deepgramSendAudio: (audioBuffer: ArrayBuffer) => ipcRenderer.invoke('deepgram-send-audio', audioBuffer),
+  deepgramLiveStart: () => ipcRenderer.invoke('deepgram-live-start'),
+  deepgramLiveStop: () => ipcRenderer.invoke('deepgram-live-stop'),
+
   // OpenAI transcription methods
   transcribeAudio: (audioPath: string) => ipcRenderer.invoke('transcribe-audio', audioPath),
   getTempPath: () => ipcRenderer.invoke('get-temp-path'),
@@ -77,5 +85,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onConversationNoSpeech: (callback: () => void) => {
     ipcRenderer.on('conversation-no-speech', () => callback())
+  },
+
+  // Deepgram event listeners
+  onDeepgramTranscript: (callback: (data: any) => void) => {
+    ipcRenderer.on('deepgram-transcript', (_event: any, data: any) => callback(data))
+  },
+  onDeepgramSpeechStarted: (callback: () => void) => {
+    ipcRenderer.on('deepgram-speech-started', () => callback())
+  },
+  onDeepgramSpeechEnded: (callback: () => void) => {
+    ipcRenderer.on('deepgram-speech-ended', () => callback())
   }
 })

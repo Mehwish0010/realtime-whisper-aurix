@@ -2,10 +2,11 @@ import { useState, useRef, useEffect } from 'react'
 import './App.css'
 import './electron.d'
 
-interface OpenAIStatus {
+interface DeepgramStatus {
   success: boolean
   initialized: boolean
-  apiKey: string | null
+  connected: boolean
+  avgLatency: number | null
 }
 
 interface ConversationMessage {
@@ -18,8 +19,8 @@ type ConversationState = 'idle' | 'listening' | 'transcribing' | 'ai_thinking' |
 
 function App() {
   const [, setIsRecording] = useState(false)
-  const [, setStatus] = useState('Checking OpenAI status...')
-  const [openaiStatus, setOpenaiStatus] = useState<OpenAIStatus | null>(null)
+  const [, setStatus] = useState('Checking Deepgram status...')
+  const [deepgramStatus, setDeepgramStatus] = useState<DeepgramStatus | null>(null)
   const [audioLevel, setAudioLevel] = useState(0)
   const [availableMics, setAvailableMics] = useState<MediaDeviceInfo[]>([])
   const [selectedMicId, setSelectedMicId] = useState<string>('')
@@ -32,11 +33,22 @@ function App() {
 
   const streamRef = useRef<MediaStream | null>(null)
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null)
+  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const [ttsEnabled, setTtsEnabled] = useState(true)
 
-  // Check OpenAI status on mount
+  // Check Deepgram status on mount
   useEffect(() => {
-    checkOpenAIStatus()
+    checkDeepgramStatus()
     listMicrophones()
+
+    // Load voices for Web Speech API
+    if (window.speechSynthesis) {
+      window.speechSynthesis.getVoices()
+      window.speechSynthesis.onvoiceschanged = () => {
+        const voices = window.speechSynthesis.getVoices()
+        console.log('🔊 Available TTS voices:', voices.length)
+      }
+    }
   }, [])
 
   const listMicrophones = async () => {
@@ -105,28 +117,91 @@ function App() {
     }
   }
 
-  const checkOpenAIStatus = async () => {
+  const checkDeepgramStatus = async () => {
     try {
       const electronAPI = (window as any).electronAPI
-      if (!electronAPI || typeof electronAPI.openaiStatus !== 'function') {
+      if (!electronAPI || typeof electronAPI.deepgramStatus !== 'function') {
         setStatus('Error: Not running in Electron mode')
         return
       }
 
-      const result: OpenAIStatus = await electronAPI.openaiStatus()
-      setOpenaiStatus(result)
+      const result: DeepgramStatus = await electronAPI.deepgramStatus()
+      setDeepgramStatus(result)
 
       if (result.initialized) {
-        setStatus('Ready for live transcription with OpenAI')
+        setStatus('Ready for live transcription with Deepgram + Groq')
       } else {
-        setStatus('OpenAI API key not configured')
+        setStatus('Deepgram API key not configured')
       }
     } catch (error) {
-      console.error('Failed to check OpenAI status:', error)
-      setStatus('Error checking OpenAI status')
+      console.error('Failed to check Deepgram status:', error)
+      setStatus('Error checking Deepgram status')
     }
   }
 
+  const speakText = async (text: string): Promise<void> => {
+    if (!ttsEnabled) {
+      console.log('TTS disabled, skipping speech')
+      return
+    }
+
+    return new Promise((resolve, reject) => {
+      try {
+        // Cancel any ongoing speech
+        window.speechSynthesis.cancel()
+
+        const utterance = new SpeechSynthesisUtterance(text)
+        speechSynthesisRef.current = utterance
+
+        // Configure voice settings
+        utterance.rate = 1.0  // Normal speed
+        utterance.pitch = 1.0  // Normal pitch
+        utterance.volume = 1.0  // Full volume
+
+        // Get available voices and select a good English voice
+        const voices = window.speechSynthesis.getVoices()
+        const englishVoice = voices.find(voice =>
+          voice.lang.startsWith('en-') && (voice.name.includes('Google') || voice.name.includes('Microsoft'))
+        ) || voices.find(voice => voice.lang.startsWith('en-'))
+
+        if (englishVoice) {
+          utterance.voice = englishVoice
+          console.log('🔊 Using voice:', englishVoice.name)
+        }
+
+        utterance.onstart = () => {
+          console.log('🔊 Started speaking')
+          setConversationState('ai_speaking')
+        }
+
+        utterance.onend = () => {
+          console.log('✅ Finished speaking')
+          setConversationState('idle')
+          resolve()
+        }
+
+        utterance.onerror = (event) => {
+          console.error('❌ Speech error:', event.error)
+          setConversationState('idle')
+          reject(new Error(`Speech synthesis error: ${event.error}`))
+        }
+
+        console.log('🔊 Speaking AI response...')
+        window.speechSynthesis.speak(utterance)
+      } catch (error) {
+        console.error('Speech synthesis failed:', error)
+        setConversationState('idle')
+        reject(error)
+      }
+    })
+  }
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel()
+    if (conversationState === 'ai_speaking') {
+      setConversationState('idle')
+    }
+  }
 
   const startConversation = async () => {
     if (isInitializing || conversationActive) {
@@ -142,7 +217,7 @@ function App() {
       setConversationHistory([])
       setConversationState('idle')
       setStatus('Ready - Click microphone to speak')
-      console.log('Conversation ready - using standard Whisper + GPT-4 + TTS')
+      console.log('Conversation ready - using Deepgram STT + Groq LLaMA')
     } catch (error) {
       console.error('Conversation start error:', error)
       setStatus(`Error: ${(error as Error).message}`)
@@ -154,6 +229,9 @@ function App() {
   const stopConversation = async () => {
     try {
       console.log('Stopping voice conversation...')
+
+      // Stop any ongoing speech
+      stopSpeaking()
 
       // Stop any ongoing recording
       if (streamRef.current) {
@@ -309,22 +387,18 @@ function App() {
 
           const electronAPI = (window as any).electronAPI
 
-          // Step 1: Transcribe with Groq Whisper (with retry)
-          setStatus('Transcribing speech... (this may take a moment)')
-          const transcriptResult = await electronAPI.groqSaveAndTranscribe(audioBuffer)
+          // Step 1: Transcribe with Deepgram
+          setStatus('Transcribing speech with Deepgram...')
+          const transcriptResult = await electronAPI.deepgramSaveAndTranscribe(audioBuffer)
           if (!transcriptResult.success || !transcriptResult.text) {
             const errorMsg = transcriptResult.error || 'Transcription failed'
-
-            // Check if it's a rate limit error
-            if (errorMsg.includes('rate limit') || errorMsg.includes('429')) {
-              throw new Error('⚠️ Groq rate limit reached. Please wait a moment and try again.')
-            }
-
             throw new Error(errorMsg)
           }
 
           const userText = transcriptResult.text.trim()
+          const confidence = transcriptResult.confidence || 0
           console.log('📝 Transcription received:', userText)
+          console.log('📊 Confidence:', (confidence * 100).toFixed(1) + '%')
           console.log('📝 Transcription length:', userText.length, 'characters')
 
           if (!userText || userText.length < 2) {
@@ -333,35 +407,28 @@ function App() {
 
           setConversationHistory(prev => [...prev, { type: 'user', text: userText, timestamp: Date.now() }])
 
-          // Step 2: Get GPT-4 response
+          // Step 2: Get Groq AI response
           setConversationState('ai_thinking')
-          setStatus('AI is thinking...')
+          setStatus('AI is thinking (Groq LLaMA 3.3)...')
           const chatResult = await electronAPI.chatSendMessage(userText)
           if (!chatResult.success || !chatResult.response) {
             throw new Error(chatResult.error || 'Failed to get AI response')
           }
 
           const aiResponse = chatResult.response
-          console.log('AI response:', aiResponse)
+          console.log('🤖 AI response:', aiResponse)
           setConversationHistory(prev => [...prev, { type: 'ai', text: aiResponse, timestamp: Date.now() }])
 
-          // Step 3: Generate speech with TTS
-          setConversationState('tts_generating')
-          setStatus('Generating voice...')
-          const ttsResult = await electronAPI.ttsSynthesize(aiResponse)
-          if (!ttsResult.success || !ttsResult.audio) {
-            throw new Error(ttsResult.error || 'TTS failed')
+          // Step 3: Speak the AI response
+          if (ttsEnabled) {
+            setStatus('AI is speaking...')
+            await speakText(aiResponse)
           }
-
-          // Step 4: Play audio
-          setConversationState('ai_speaking')
-          setStatus('AI is speaking...')
-          await playAIAudio(ttsResult.audio)
 
           // Done
           setConversationState('idle')
           setStatus('Ready - Click microphone to speak again')
-          console.log('Turn complete')
+          console.log('✅ Turn complete')
         } catch (error: any) {
           console.error('Processing error:', error)
           setStatus(`Error: ${error.message}`)
@@ -526,10 +593,28 @@ function App() {
               borderRadius: '6px',
               fontSize: '13px',
               cursor: 'pointer',
-              fontWeight: '500'
+              fontWeight: '500',
+              marginBottom: '10px'
             }}
           >
             🧪 Test Microphone (3 sec)
+          </button>
+          <button
+            onClick={() => setTtsEnabled(!ttsEnabled)}
+            style={{
+              width: '100%',
+              padding: '8px',
+              backgroundColor: ttsEnabled ? '#4CAF50' : '#9E9E9E',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '13px',
+              cursor: 'pointer',
+              fontWeight: '500',
+              transition: 'all 0.3s ease'
+            }}
+          >
+            {ttsEnabled ? '🔊 Voice Response: ON' : '🔇 Voice Response: OFF'}
           </button>
         </div>
 
@@ -564,15 +649,14 @@ function App() {
           fontWeight: '600',
           minHeight: '28px'
         }}>
-          {!openaiStatus?.initialized && ' Setting up...'}
-          {openaiStatus?.initialized && isInitializing && ' Initializing...'}
-          {openaiStatus?.initialized && !isInitializing && !conversationActive && ' Click to start'}
-          {openaiStatus?.initialized && !isInitializing && conversationActive && conversationState === 'idle' && '🎤 Click to record'}
-          {conversationState === 'listening' && ' Recording... (5 seconds)'}
-          {conversationState === 'transcribing' && ' Processing speech...'}
-          {conversationState === 'ai_thinking' && ' AI thinking...'}
-          {conversationState === 'tts_generating' && ' TTS'}
-          {conversationState === 'ai_speaking' && ' AI responding...'}
+          {!deepgramStatus?.initialized && '⚙️ Setting up...'}
+          {deepgramStatus?.initialized && isInitializing && '🔄 Initializing...'}
+          {deepgramStatus?.initialized && !isInitializing && !conversationActive && '👆 Click to start'}
+          {deepgramStatus?.initialized && !isInitializing && conversationActive && conversationState === 'idle' && '🎤 Click to record'}
+          {conversationState === 'listening' && '🎙️ Recording... (5 seconds)'}
+          {conversationState === 'transcribing' && '🔄 Processing with Deepgram...'}
+          {conversationState === 'ai_thinking' && '🤔 Groq AI thinking...'}
+          {conversationState === 'ai_speaking' && '🔊 AI speaking...'}
         </div>
 
         {/* Main Button */}
@@ -584,13 +668,13 @@ function App() {
               startManualRecording()
             }
           }}
-          disabled={!openaiStatus?.initialized || isInitializing || (conversationActive && conversationState !== 'idle')}
+          disabled={!deepgramStatus?.initialized || isInitializing || (conversationActive && conversationState !== 'idle')}
           style={{
             width: '180px',
             height: '180px',
             borderRadius: '50%',
             border: 'none',
-            background: !openaiStatus?.initialized
+            background: !deepgramStatus?.initialized
               ? '#ccc'
               : conversationState === 'listening'
               ? 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)'
@@ -599,8 +683,8 @@ function App() {
               : '#e0e0e0',
             color: 'white',
             fontSize: '80px',
-            cursor: (openaiStatus?.initialized && (conversationState === 'idle' || !conversationActive)) ? 'pointer' : 'not-allowed',
-            boxShadow: (conversationState === 'idle' || !conversationActive) && openaiStatus?.initialized
+            cursor: (deepgramStatus?.initialized && (conversationState === 'idle' || !conversationActive)) ? 'pointer' : 'not-allowed',
+            boxShadow: (conversationState === 'idle' || !conversationActive) && deepgramStatus?.initialized
               ? '0 10px 40px rgba(102, 126, 234, 0.4)'
               : conversationState === 'listening'
               ? '0 10px 40px rgba(240, 147, 251, 0.4), 0 0 0 20px rgba(240, 147, 251, 0.1), 0 0 0 40px rgba(240, 147, 251, 0.05)'
@@ -613,12 +697,12 @@ function App() {
             animation: conversationState === 'listening' ? 'pulse 1.5s infinite' : 'none'
           }}
           onMouseOver={(e) => {
-            if (openaiStatus?.initialized && (conversationState === 'idle' || !conversationActive)) {
+            if (deepgramStatus?.initialized && (conversationState === 'idle' || !conversationActive)) {
               e.currentTarget.style.transform = 'scale(1.05)'
             }
           }}
           onMouseOut={(e) => {
-            if (openaiStatus?.initialized && (conversationState === 'idle' || !conversationActive)) {
+            if (deepgramStatus?.initialized && (conversationState === 'idle' || !conversationActive)) {
               e.currentTarget.style.transform = 'scale(1)'
             }
           }}
@@ -719,7 +803,7 @@ function App() {
         )}
 
         {/* Setup Warning */}
-        {!openaiStatus?.initialized && (
+        {!deepgramStatus?.initialized && (
           <div style={{
             marginTop: '30px',
             padding: '20px',
@@ -731,7 +815,7 @@ function App() {
           }}>
             <strong>⚠️ Setup Required</strong>
             <p style={{ margin: '10px 0 0 0' }}>
-              Please configure your OpenAI API key in the .env file
+              Please configure your Deepgram and Groq API keys in the .env file
             </p>
           </div>
         )}
