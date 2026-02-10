@@ -33,22 +33,12 @@ function App() {
 
   const streamRef = useRef<MediaStream | null>(null)
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null)
-  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null)
   const [ttsEnabled, setTtsEnabled] = useState(true)
 
   // Check Deepgram status on mount
   useEffect(() => {
     checkDeepgramStatus()
     listMicrophones()
-
-    // Load voices for Web Speech API
-    if (window.speechSynthesis) {
-      window.speechSynthesis.getVoices()
-      window.speechSynthesis.onvoiceschanged = () => {
-        const voices = window.speechSynthesis.getVoices()
-        console.log('🔊 Available TTS voices:', voices.length)
-      }
-    }
   }, [])
 
   const listMicrophones = async () => {
@@ -70,14 +60,14 @@ function App() {
 
   const testMicrophone = async () => {
     try {
-      console.log('🧪 Testing microphone...')
+      console.log(' Testing microphone...')
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true
       })
 
       const track = stream.getAudioTracks()[0]
-      console.log('✅ Microphone connected:', track.label)
-      console.log('📊 Settings:', track.getSettings())
+      console.log(' Microphone connected:', track.label)
+      console.log(' Settings:', track.getSettings())
 
       // Create audio context to check levels
       const audioContext = new AudioContext()
@@ -88,7 +78,7 @@ function App() {
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount)
 
-      console.log('🔊 Speak into your microphone for 3 seconds...')
+      console.log(' Speak into your microphone for 3 seconds...')
       let maxLevel = 0
       const testInterval = setInterval(() => {
         analyser.getByteFrequencyData(dataArray)
@@ -103,16 +93,16 @@ function App() {
         stream.getTracks().forEach(t => t.stop())
         audioContext.close()
         if (maxLevel > 10) {
-          console.log('✅ SUCCESS! Microphone is working. Max level:', maxLevel)
-          alert(`✅ Microphone working! Max level: ${maxLevel}`)
+          console.log(' SUCCESS! Microphone is working. Max level:', maxLevel)
+          alert(` Microphone working! Max level: ${maxLevel}`)
         } else {
-          console.log('❌ FAILED! No audio detected. Max level:', maxLevel)
-          alert('❌ No audio detected! Check Windows microphone settings.')
+          console.log(' FAILED! No audio detected. Max level:', maxLevel)
+          alert(' No audio detected! Check Windows microphone settings.')
         }
       }, 3000)
 
     } catch (error) {
-      console.error('❌ Mic test error:', error)
+      console.error(' Mic test error:', error)
       alert('Error: ' + (error as Error).message)
     }
   }
@@ -145,59 +135,38 @@ function App() {
       return
     }
 
-    return new Promise((resolve, reject) => {
-      try {
-        // Cancel any ongoing speech
-        window.speechSynthesis.cancel()
+    try {
+      console.log(' Generating speech with Deepgram Aura...')
+      setConversationState('tts_generating')
 
-        const utterance = new SpeechSynthesisUtterance(text)
-        speechSynthesisRef.current = utterance
+      const electronAPI = (window as any).electronAPI
+      const result = await electronAPI.ttsSynthesize(text)
 
-        // Configure voice settings
-        utterance.rate = 1.0  // Normal speed
-        utterance.pitch = 1.0  // Normal pitch
-        utterance.volume = 1.0  // Full volume
-
-        // Get available voices and select a good English voice
-        const voices = window.speechSynthesis.getVoices()
-        const englishVoice = voices.find(voice =>
-          voice.lang.startsWith('en-') && (voice.name.includes('Google') || voice.name.includes('Microsoft'))
-        ) || voices.find(voice => voice.lang.startsWith('en-'))
-
-        if (englishVoice) {
-          utterance.voice = englishVoice
-          console.log('🔊 Using voice:', englishVoice.name)
-        }
-
-        utterance.onstart = () => {
-          console.log('🔊 Started speaking')
-          setConversationState('ai_speaking')
-        }
-
-        utterance.onend = () => {
-          console.log('✅ Finished speaking')
-          setConversationState('idle')
-          resolve()
-        }
-
-        utterance.onerror = (event) => {
-          console.error('❌ Speech error:', event.error)
-          setConversationState('idle')
-          reject(new Error(`Speech synthesis error: ${event.error}`))
-        }
-
-        console.log('🔊 Speaking AI response...')
-        window.speechSynthesis.speak(utterance)
-      } catch (error) {
-        console.error('Speech synthesis failed:', error)
-        setConversationState('idle')
-        reject(error)
+      if (!result.success) {
+        throw new Error(result.error || 'TTS synthesis failed')
       }
-    })
+
+      console.log('Playing Deepgram TTS audio...')
+      setConversationState('ai_speaking')
+
+      // Play the audio
+      await playAIAudio(result.audio)
+
+      console.log(' Finished speaking')
+      setConversationState('idle')
+    } catch (error) {
+      console.error('TTS error:', error)
+      setConversationState('idle')
+      throw error
+    }
   }
 
   const stopSpeaking = () => {
-    window.speechSynthesis.cancel()
+    // Stop audio player if playing
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause()
+      audioPlayerRef.current.currentTime = 0
+    }
     if (conversationState === 'ai_speaking') {
       setConversationState('idle')
     }
@@ -347,7 +316,7 @@ function App() {
       }
 
       levelInterval = setInterval(checkAudioLevel, 100)
-      console.log('✅ Audio monitoring started - Speak now!')
+      console.log(' Audio monitoring started - Speak now!')
 
       // Wait 500ms before starting recording
       await new Promise(resolve => setTimeout(resolve, 500))
@@ -381,8 +350,8 @@ function App() {
           console.log('Max audio level during recording:', maxAudioLevel)
 
           if (maxAudioLevel === 0) {
-            console.warn('⚠️ Warning: Audio level was 0 during recording. Microphone may be muted in Windows.')
-            console.warn('⚠️ If transcription is incorrect, check Windows Sound Settings > Input volume')
+            console.warn(' Warning: Audio level was 0 during recording. Microphone may be muted in Windows.')
+            console.warn(' If transcription is incorrect, check Windows Sound Settings > Input volume')
           }
 
           const electronAPI = (window as any).electronAPI
@@ -397,12 +366,12 @@ function App() {
 
           const userText = transcriptResult.text.trim()
           const confidence = transcriptResult.confidence || 0
-          console.log('📝 Transcription received:', userText)
-          console.log('📊 Confidence:', (confidence * 100).toFixed(1) + '%')
-          console.log('📝 Transcription length:', userText.length, 'characters')
+          console.log('Transcription received:', userText)
+          console.log(' Confidence:', (confidence * 100).toFixed(1) + '%')
+          console.log(' Transcription length:', userText.length, 'characters')
 
           if (!userText || userText.length < 2) {
-            console.warn('⚠️ Warning: Transcription is very short or empty')
+            console.warn(' Warning: Transcription is very short or empty')
           }
 
           setConversationHistory(prev => [...prev, { type: 'user', text: userText, timestamp: Date.now() }])
@@ -416,7 +385,7 @@ function App() {
           }
 
           const aiResponse = chatResult.response
-          console.log('🤖 AI response:', aiResponse)
+          console.log(' AI response:', aiResponse)
           setConversationHistory(prev => [...prev, { type: 'ai', text: aiResponse, timestamp: Date.now() }])
 
           // Step 3: Speak the AI response
@@ -428,7 +397,7 @@ function App() {
           // Done
           setConversationState('idle')
           setStatus('Ready - Click microphone to speak again')
-          console.log('✅ Turn complete')
+          console.log(' Turn complete')
         } catch (error: any) {
           console.error('Processing error:', error)
           setStatus(`Error: ${error.message}`)
@@ -437,7 +406,7 @@ function App() {
           // Clean up interval
           if (levelInterval) {
             clearInterval(levelInterval)
-            console.log('🛑 Audio monitoring stopped')
+            console.log(' Audio monitoring stopped')
           }
           // Clean up stream
           if (streamRef.current) {
@@ -458,7 +427,7 @@ function App() {
         console.log('Timeout reached, stopping recording. State:', mediaRecorder.state)
         if (levelInterval) {
           clearInterval(levelInterval)
-          console.log('🛑 Audio monitoring stopped (timeout)')
+          console.log(' Audio monitoring stopped (timeout)')
         }
         if (mediaRecorder.state === 'recording') {
           mediaRecorder.stop()
@@ -614,7 +583,7 @@ function App() {
               transition: 'all 0.3s ease'
             }}
           >
-            {ttsEnabled ? '🔊 Voice Response: ON' : '🔇 Voice Response: OFF'}
+            {ttsEnabled ? ' Voice Response: ON' : ' Voice Response: OFF'}
           </button>
         </div>
 
@@ -622,7 +591,7 @@ function App() {
         {conversationState === 'listening' && (
           <div style={{ marginBottom: '20px' }}>
             <div style={{ fontSize: '12px', color: '#666', marginBottom: '5px' }}>
-              Audio Level: {audioLevel > 10 ? '🔊' : '🔇'} {audioLevel}
+              Audio Level: {audioLevel > 10 ? '' : ''} {audioLevel}
             </div>
             <div style={{
               width: '100%',
@@ -649,14 +618,14 @@ function App() {
           fontWeight: '600',
           minHeight: '28px'
         }}>
-          {!deepgramStatus?.initialized && '⚙️ Setting up...'}
-          {deepgramStatus?.initialized && isInitializing && '🔄 Initializing...'}
-          {deepgramStatus?.initialized && !isInitializing && !conversationActive && '👆 Click to start'}
+          {!deepgramStatus?.initialized && 'Setting up...'}
+          {deepgramStatus?.initialized && isInitializing && ' Initializing...'}
+          {deepgramStatus?.initialized && !isInitializing && !conversationActive && ' Click to start'}
           {deepgramStatus?.initialized && !isInitializing && conversationActive && conversationState === 'idle' && '🎤 Click to record'}
-          {conversationState === 'listening' && '🎙️ Recording... (5 seconds)'}
-          {conversationState === 'transcribing' && '🔄 Processing with Deepgram...'}
-          {conversationState === 'ai_thinking' && '🤔 Groq AI thinking...'}
-          {conversationState === 'ai_speaking' && '🔊 AI speaking...'}
+          {conversationState === 'listening' && ' Recording... (5 seconds)'}
+          {conversationState === 'transcribing' && ' Processing with Deepgram...'}
+          {conversationState === 'ai_thinking' && ' Groq AI thinking...'}
+          {conversationState === 'ai_speaking' && 'AI speaking...'}
         </div>
 
         {/* Main Button */}
@@ -813,7 +782,7 @@ function App() {
             color: '#856404',
             textAlign: 'left'
           }}>
-            <strong>⚠️ Setup Required</strong>
+            <strong> Setup Required</strong>
             <p style={{ margin: '10px 0 0 0' }}>
               Please configure your Deepgram and Groq API keys in the .env file
             </p>

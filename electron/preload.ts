@@ -45,8 +45,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('realtime-rate-limit', (_event: any, info: any) => callback(info))
   },
 
-  // TTS methods
-  ttsSynthesize: (text: string, options?: any) => ipcRenderer.invoke('tts-synthesize', text, options),
+  // TTS methods (Deepgram Aura)
+  ttsSynthesize: (text: string) => ipcRenderer.invoke('tts-synthesize', text),
+  ttsSetVoice: (voice: string) => ipcRenderer.invoke('tts-set-voice', voice),
+  ttsGetVoices: () => ipcRenderer.invoke('tts-get-voices'),
   ttsStatus: () => ipcRenderer.invoke('tts-status'),
 
   // Chat methods

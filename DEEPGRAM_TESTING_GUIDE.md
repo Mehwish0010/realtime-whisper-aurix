@@ -2,7 +2,7 @@
 
 ## Overview
 
-This application has been configured to use **Deepgram** for Speech-to-Text (STT) and **Groq** for AI chat responses. All previous STT implementations (GrowWhisper, OpenAI) and TTS implementations (Inworld) have been removed.
+This application has been configured to use **Deepgram** for Speech-to-Text (STT) and **Groq** for AI chat responses.
 
 ## Architecture
 

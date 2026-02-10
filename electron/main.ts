@@ -6,6 +6,7 @@ import fs from 'fs/promises'
 import Groq from 'groq-sdk'
 import { initializeDeepgram, getDeepgramInstance, transcribeAudioFile } from './deepgram-stt.js'
 import { createGroqConversationManager, getGroqConversationManager } from './groq-chat.js'
+import { initializeDeepgramTTS, getDeepgramTTSInstance, synthesizeSpeech, AURA_VOICES, type AuraVoice } from './deepgram-tts.js'
 
 // Load environment variables
 dotenv.config()
@@ -84,16 +85,21 @@ app.whenReady().then(async () => {
   const deepgramApiKey = process.env.DEEPGRAM_API_KEY
 
   if (!deepgramApiKey || deepgramApiKey === 'your-deepgram-api-key-here') {
-    console.warn('⚠️  WARNING: DEEPGRAM_API_KEY not set in .env file')
-    console.warn('⚠️  Deepgram STT will not be available')
-    console.warn('⚠️  Get your API key from: https://console.deepgram.com/')
+    console.warn('WARNING: DEEPGRAM_API_KEY not set in .env file')
+    console.warn('Deepgram STT/TTS will not be available')
+    console.warn('Get your API key from: https://console.deepgram.com/')
   } else {
     try {
+      // Initialize STT
       const deepgram = initializeDeepgram(deepgramApiKey)
       await deepgram.initialize()
-      console.log('✅ Deepgram initialized successfully')
+      console.log('Deepgram STT initialized successfully')
+
+      // Initialize TTS with Perseus voice (natural male)
+      initializeDeepgramTTS(deepgramApiKey, 'perseus')
+      console.log('Deepgram TTS initialized successfully')
     } catch (error) {
-      console.error('❌ Failed to initialize Deepgram:', error)
+      console.error('Failed to initialize Deepgram:', error)
     }
   }
 
@@ -101,9 +107,9 @@ app.whenReady().then(async () => {
   const groqApiKey = process.env.GROQ_API_KEY
 
   if (!groqApiKey || groqApiKey === 'your-groq-api-key-here') {
-    console.warn('⚠️  WARNING: GROQ_API_KEY not set in .env file')
-    console.warn('⚠️  Groq Chat will not be available')
-    console.warn('⚠️  Get your API key from: https://console.groq.com/keys')
+    console.warn('WARNING: GROQ_API_KEY not set in .env file')
+    console.warn('Groq Chat will not be available')
+    console.warn('Get your API key from: https://console.groq.com/keys')
   } else {
     try {
       // Create Groq client for chat
@@ -116,9 +122,9 @@ app.whenReady().then(async () => {
         temperature: 0.7,
         maxTokens: 1000
       })
-      console.log('✅ Groq chat manager initialized successfully')
+      console.log('Groq chat manager initialized successfully')
     } catch (error) {
-      console.error('❌ Failed to initialize Groq:', error)
+      console.error('Failed to initialize Groq:', error)
     }
   }
 
@@ -186,7 +192,7 @@ ipcMain.handle('deepgram-status', async () => {
 // Transcribe audio file (Deepgram)
 ipcMain.handle('deepgram-transcribe-audio', async (_event, audioPath: string) => {
   try {
-    console.log('📁 Received Deepgram transcription request for:', audioPath)
+    console.log('Received Deepgram transcription request for:', audioPath)
 
     const deepgram = getDeepgramInstance()
     if (!deepgram) {
@@ -198,9 +204,9 @@ ipcMain.handle('deepgram-transcribe-audio', async (_event, audioPath: string) =>
     // Clean up the temp file after transcription
     try {
       await fs.unlink(audioPath)
-      console.log('🗑️  Cleaned up temp file:', audioPath)
+      console.log('Cleaned up temp file:', audioPath)
     } catch (cleanupError) {
-      console.warn('⚠️  Failed to clean up temp file:', cleanupError)
+      console.warn('Failed to clean up temp file:', cleanupError)
     }
 
     return {
@@ -210,7 +216,7 @@ ipcMain.handle('deepgram-transcribe-audio', async (_event, audioPath: string) =>
       words: result.words
     }
   } catch (error: any) {
-    console.error('❌ Deepgram transcription error:', error)
+    console.error('Deepgram transcription error:', error)
     return {
       success: false,
       error: error.message || 'Unknown error occurred'
@@ -221,7 +227,7 @@ ipcMain.handle('deepgram-transcribe-audio', async (_event, audioPath: string) =>
 // Save audio buffer and transcribe (Deepgram)
 ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: ArrayBuffer) => {
   try {
-    console.log('📥 Received audio buffer for Deepgram, size:', audioBuffer.byteLength, 'bytes')
+    console.log('Received audio buffer for Deepgram, size:', audioBuffer.byteLength, 'bytes')
 
     const deepgram = getDeepgramInstance()
     if (!deepgram) {
@@ -230,16 +236,16 @@ ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: Array
 
     // Validate audio buffer size
     if (audioBuffer.byteLength < 1000) {
-      throw new Error('❌ Audio file too small. Recording may have failed. Please try again.')
+      throw new Error('Audio file too small. Recording may have failed. Please try again.')
     }
 
-    console.log('✅ Audio buffer validated:', audioBuffer.byteLength, 'bytes')
+    console.log('Audio buffer validated:', audioBuffer.byteLength, 'bytes')
 
     // Save audio buffer to temp file
     const timestamp = Date.now()
     const filename = `recording_${timestamp}.webm`
     const audioPath = await saveAudioFile(audioBuffer, filename)
-    console.log('💾 Saved audio file to:', audioPath)
+    console.log('Saved audio file to:', audioPath)
 
     // Transcribe the audio
     console.log('🎤 Starting Deepgram transcription...')
@@ -250,9 +256,9 @@ ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: Array
     // Clean up the temp file
     try {
       await fs.unlink(audioPath)
-      console.log('🗑️  Cleaned up temp file:', audioPath)
+      console.log('Cleaned up temp file:', audioPath)
     } catch (cleanupError) {
-      console.warn('⚠️  Failed to clean up temp file:', cleanupError)
+      console.warn('Failed to clean up temp file:', cleanupError)
     }
 
     return {
@@ -262,7 +268,7 @@ ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: Array
       words: result.words
     }
   } catch (error: any) {
-    console.error('❌ Deepgram save and transcribe error:', error)
+    console.error(' Deepgram save and transcribe error:', error)
     return {
       success: false,
       error: error.message || 'Unknown error occurred'
@@ -275,7 +281,7 @@ ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: Array
 // Start live transcription session
 ipcMain.handle('deepgram-live-start', async () => {
   try {
-    console.log('🎙️  Starting Deepgram live transcription...')
+    console.log('Starting Deepgram live transcription...')
 
     const deepgram = getDeepgramInstance()
     if (!deepgram) {
@@ -284,7 +290,7 @@ ipcMain.handle('deepgram-live-start', async () => {
 
     // Set up event listeners
     deepgram.on('transcript', (result: any) => {
-      console.log('📝 Live transcription:', result.transcript)
+      console.log(' Live transcription:', result.transcript)
       if (mainWindow) {
         mainWindow.webContents.send('deepgram-transcript', {
           transcript: result.transcript,
@@ -310,21 +316,21 @@ ipcMain.handle('deepgram-live-start', async () => {
     })
 
     deepgram.on('error', (error: any) => {
-      console.error('❌ Deepgram error:', error)
+      console.error('Deepgram error:', error)
       if (mainWindow) {
         mainWindow.webContents.send('deepgram-error', error.message || 'Unknown error')
       }
     })
 
     deepgram.on('connected', () => {
-      console.log('✅ Deepgram live session connected')
+      console.log(' Deepgram live session connected')
       if (mainWindow) {
         mainWindow.webContents.send('deepgram-connected')
       }
     })
 
     deepgram.on('closed', () => {
-      console.log('🔌 Deepgram live session closed')
+      console.log(' Deepgram live session closed')
       if (mainWindow) {
         mainWindow.webContents.send('deepgram-closed')
       }
@@ -337,7 +343,7 @@ ipcMain.handle('deepgram-live-start', async () => {
       message: 'Deepgram live transcription started'
     }
   } catch (error: any) {
-    console.error('❌ Failed to start live transcription:', error)
+    console.error(' Failed to start live transcription:', error)
     return {
       success: false,
       error: error.message
@@ -368,7 +374,7 @@ ipcMain.handle('deepgram-send-audio', async (_event, audioBuffer: ArrayBuffer) =
 // Stop live transcription session
 ipcMain.handle('deepgram-live-stop', async () => {
   try {
-    console.log('🛑 Stopping Deepgram live transcription...')
+    console.log(' Stopping Deepgram live transcription...')
 
     const deepgram = getDeepgramInstance()
     if (!deepgram) {
@@ -382,7 +388,7 @@ ipcMain.handle('deepgram-live-stop', async () => {
       message: 'Deepgram live transcription stopped'
     }
   } catch (error: any) {
-    console.error('❌ Failed to stop live transcription:', error)
+    console.error('Failed to stop live transcription:', error)
     return {
       success: false,
       error: error.message
@@ -470,4 +476,81 @@ ipcMain.handle('chat-set-system-prompt', async (_event, prompt: string) => {
   }
 })
 
-console.log('✅ AURIX Voice Assistant - Deepgram STT + Groq Chat Integration Ready')
+// TTS IPC Handlers (using Deepgram Aura)
+
+ipcMain.handle('tts-synthesize', async (_event, text: string) => {
+  try {
+    console.log('🔊 TTS request:', text.substring(0, 50) + (text.length > 50 ? '...' : ''))
+
+    const tts = getDeepgramTTSInstance()
+    if (!tts || !tts.isInitialized()) {
+      throw new Error('Deepgram TTS not initialized')
+    }
+
+    const audioBuffer = await synthesizeSpeech(text)
+    console.log(' TTS audio generated:', audioBuffer.length, 'bytes')
+
+    // Return as ArrayBuffer for the renderer
+    return {
+      success: true,
+      audio: audioBuffer.buffer.slice(audioBuffer.byteOffset, audioBuffer.byteOffset + audioBuffer.byteLength)
+    }
+  } catch (error: any) {
+    console.error(' TTS error:', error)
+    return {
+      success: false,
+      error: error.message || 'TTS synthesis failed'
+    }
+  }
+})
+
+ipcMain.handle('tts-set-voice', async (_event, voice: string) => {
+  try {
+    const tts = getDeepgramTTSInstance()
+    if (!tts) {
+      throw new Error('Deepgram TTS not initialized')
+    }
+
+    tts.setVoice(voice as AuraVoice)
+    console.log(' TTS voice changed to:', voice)
+
+    return { success: true, voice }
+  } catch (error: any) {
+    console.error(' TTS set voice error:', error)
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+ipcMain.handle('tts-get-voices', async () => {
+  try {
+    return {
+      success: true,
+      voices: AURA_VOICES
+    }
+  } catch (error: any) {
+    return {
+      success: false,
+      error: error.message
+    }
+  }
+})
+
+ipcMain.handle('tts-status', async () => {
+  const tts = getDeepgramTTSInstance()
+  if (!tts || !tts.isInitialized()) {
+    return {
+      success: false,
+      error: 'Deepgram TTS not initialized'
+    }
+  }
+  return {
+    success: true,
+    initialized: true,
+    voice: tts.getVoice()
+  }
+})
+
+console.log('AURIX Voice Assistant - Deepgram STT + TTS + Groq Chat Integration Ready')

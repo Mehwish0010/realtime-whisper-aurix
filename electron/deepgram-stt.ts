@@ -1,4 +1,4 @@
-import { createClient, LiveTranscriptionEvents, LiveConnectionState } from '@deepgram/sdk';
+import { createClient, LiveTranscriptionEvents } from '@deepgram/sdk';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -10,6 +10,9 @@ interface DeepgramSTTConfig {
   encoding?: string;
   sampleRate?: number;
   interimResults?: boolean;
+
+
+  
 }
 
 interface TranscriptionResult {

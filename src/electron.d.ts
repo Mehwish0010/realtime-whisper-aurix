@@ -33,9 +33,11 @@ export interface ElectronAPI {
   onRealtimeError: (callback: (error: string) => void) => void
   onRealtimeRateLimit: (callback: (info: { retryCount: number; maxRetries: number; cooldownMs: number }) => void) => void
 
-  // TTS methods
-  ttsSynthesize: (text: string, options?: any) => Promise<{ success: boolean; audio?: ArrayBuffer; error?: string }>
-  ttsStatus: () => Promise<{ success: boolean; initialized: boolean }>
+  // TTS methods (Deepgram Aura)
+  ttsSynthesize: (text: string) => Promise<{ success: boolean; audio?: ArrayBuffer; error?: string }>
+  ttsSetVoice: (voice: string) => Promise<{ success: boolean; voice?: string; error?: string }>
+  ttsGetVoices: () => Promise<{ success: boolean; voices?: Record<string, string>; error?: string }>
+  ttsStatus: () => Promise<{ success: boolean; initialized?: boolean; voice?: string; error?: string }>
 
   // Chat methods
   chatSendMessage: (message: string) => Promise<{ success: boolean; response?: string; error?: string }>
