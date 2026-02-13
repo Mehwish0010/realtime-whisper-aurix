@@ -14,8 +14,21 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['ws', 'bufferutil', 'utf-8-validate', 'groq-sdk', '@deepgram/sdk']
-            }
+              // Keep some heavy/native Node modules external so Electron
+              // loads them at runtime instead of Vite bundling them.
+              external: [
+                'ws',
+                'bufferutil',
+                'utf-8-validate',
+                'groq-sdk',
+                '@deepgram/sdk',
+                // Important: keep firebase-admin as a Node dependency so its
+                // internal use of __dirname works correctly.
+                'firebase-admin',
+                'firebase-admin/app',
+                'firebase-admin/firestore',
+              ],
+            },
           }
         }
       },
