@@ -57,6 +57,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatGetHistory: () => ipcRenderer.invoke('chat-get-history'),
   chatSetSystemPrompt: (prompt: string) => ipcRenderer.invoke('chat-set-system-prompt', prompt),
 
+  // Retrieval methods
+  retrievalSearch: (query: string, userId?: string, limit?: number) => ipcRenderer.invoke('retrieval-search', query, userId, limit),
+  retrievalSearchDocs: (query: string, limit?: number) => ipcRenderer.invoke('retrieval-search-docs', query, limit),
+  retrievalIndexDocument: (params: { content: string; source: string; title: string }) => ipcRenderer.invoke('retrieval-index-document', params),
+  retrievalIndexDocuments: (paramsList: { content: string; source: string; title: string }[]) => ipcRenderer.invoke('retrieval-index-documents', paramsList),
+  retrievalStatus: () => ipcRenderer.invoke('retrieval-status'),
+
   // Conversation orchestrator methods
   conversationStart: (options?: any) => ipcRenderer.invoke('conversation-start', options),
   conversationStop: () => ipcRenderer.invoke('conversation-stop'),
