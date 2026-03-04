@@ -22,6 +22,25 @@ import {
   type AuraVoice,
 } from "./deepgram-tts.js";
 import firebaseAdmin from "firebase-admin";
+import {
+  initializeEmbeddingService,
+  getEmbeddingService,
+} from "./embedding-service.js";
+import {
+  initializeVectorService,
+  initializeVectorCollections,
+  getVectorService,
+} from "./vector-service.js";
+import {
+  initializeRetrievalService,
+  isRetrievalReady,
+  indexConversationMessage,
+  indexDocument,
+  indexDocuments,
+  search as retrievalSearch,
+  searchDocumentation,
+  buildContextPrompt,
+} from "./retrieval-service.js";
 
 const { firestore } = firebaseAdmin;
 
@@ -151,6 +170,25 @@ app.whenReady().then(async () => {
     } catch (error) {
       console.error("Failed to initialize Groq:", error);
     }
+  }
+
+  // Initialize RAG pipeline (embedding → vector → retrieval)
+  try {
+    const cohereApiKey = process.env.COHERE_API_KEY;
+    const qdrantUrl = process.env.QDRANT_URL || "http://localhost:6333";
+    const qdrantApiKey = process.env.QDRANT_API_KEY;
+
+    if (cohereApiKey) {
+      initializeEmbeddingService(cohereApiKey);
+      initializeVectorService(qdrantUrl, qdrantApiKey || undefined);
+      await initializeVectorCollections();
+      initializeRetrievalService();
+      console.log("RAG pipeline initialized successfully");
+    } else {
+      console.warn("WARNING: COHERE_API_KEY not set — RAG pipeline disabled");
+    }
+  } catch (error) {
+    console.error("Failed to initialize RAG pipeline (non-fatal):", error);
   }
 
   // Create window
@@ -478,7 +516,49 @@ ipcMain.handle("chat-send-message", async (_event, message: string) => {
       throw new Error("Groq chat manager not initialized.");
     }
 
-    const response = await chatManager.sendMessage(message);
+    // RAG: retrieve relevant context and prepend to message
+    let augmentedMessage = message;
+    if (isRetrievalReady()) {
+      try {
+        const results = await retrievalSearch(message, "userId", 5);
+        const contextPrompt = buildContextPrompt(results);
+        if (contextPrompt) {
+          augmentedMessage = contextPrompt + message;
+          console.log(`RAG: injected ${results.length} context results`);
+        }
+      } catch (ragError) {
+        console.warn("RAG retrieval failed (non-fatal):", ragError);
+      }
+    }
+
+    const response = await chatManager.sendMessage(augmentedMessage);
+
+    // RAG: index user message and AI response
+    if (isRetrievalReady()) {
+      try {
+        const convId = "conversationId";
+        const msgTimestamp = String(Date.now());
+        await Promise.all([
+          indexConversationMessage({
+            content: message,
+            userId: "userId",
+            conversationId: convId,
+            messageId: `user-${msgTimestamp}`,
+            role: "user",
+          }),
+          indexConversationMessage({
+            content: response,
+            userId: "userId",
+            conversationId: convId,
+            messageId: `aurix-${msgTimestamp}`,
+            role: "aurix",
+          }),
+        ]);
+        console.log("RAG: indexed user message and AI response");
+      } catch (indexError) {
+        console.warn("RAG indexing failed (non-fatal):", indexError);
+      }
+    }
 
     await db
       .collection("users")
@@ -640,6 +720,77 @@ ipcMain.handle("tts-status", async () => {
     success: true,
     initialized: true,
     voice: tts.getVoice(),
+  };
+});
+
+// Retrieval IPC Handlers
+
+ipcMain.handle(
+  "retrieval-search",
+  async (_event, query: string, userId?: string, limit?: number) => {
+    try {
+      if (!isRetrievalReady()) {
+        return { success: false, error: "Retrieval service not available" };
+      }
+      const results = await retrievalSearch(query, userId || "userId", limit || 5);
+      return { success: true, results };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
+);
+
+ipcMain.handle(
+  "retrieval-search-docs",
+  async (_event, query: string, limit?: number) => {
+    try {
+      if (!isRetrievalReady()) {
+        return { success: false, error: "Retrieval service not available" };
+      }
+      const results = await searchDocumentation(query, limit || 5);
+      return { success: true, results };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
+);
+
+ipcMain.handle(
+  "retrieval-index-document",
+  async (_event, params: { content: string; source: string; title: string }) => {
+    try {
+      if (!isRetrievalReady()) {
+        return { success: false, error: "Retrieval service not available" };
+      }
+      await indexDocument(params);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
+);
+
+ipcMain.handle(
+  "retrieval-index-documents",
+  async (_event, paramsList: { content: string; source: string; title: string }[]) => {
+    try {
+      if (!isRetrievalReady()) {
+        return { success: false, error: "Retrieval service not available" };
+      }
+      await indexDocuments(paramsList);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
+);
+
+ipcMain.handle("retrieval-status", async () => {
+  return {
+    success: true,
+    available: isRetrievalReady(),
+    embeddingService: getEmbeddingService() !== null,
+    vectorService: getVectorService() !== null,
   };
 });
 

@@ -45,6 +45,13 @@ export interface ElectronAPI {
   chatGetHistory: () => Promise<{ success: boolean; history?: any[]; error?: string }>
   chatSetSystemPrompt: (prompt: string) => Promise<{ success: boolean; error?: string }>
 
+  // Retrieval methods
+  retrievalSearch: (query: string, userId?: string, limit?: number) => Promise<{ success: boolean; results?: any[]; error?: string }>
+  retrievalSearchDocs: (query: string, limit?: number) => Promise<{ success: boolean; results?: any[]; error?: string }>
+  retrievalIndexDocument: (params: { content: string; source: string; title: string }) => Promise<{ success: boolean; error?: string }>
+  retrievalIndexDocuments: (paramsList: { content: string; source: string; title: string }[]) => Promise<{ success: boolean; error?: string }>
+  retrievalStatus: () => Promise<{ success: boolean; available?: boolean; embeddingService?: boolean; vectorService?: boolean }>
+
   // Conversation orchestrator methods
   conversationStart: (options?: any) => Promise<{ success: boolean; message?: string; error?: string }>
   conversationStop: () => Promise<{ success: boolean; message?: string; error?: string }>

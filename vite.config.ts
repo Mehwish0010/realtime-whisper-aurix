@@ -27,6 +27,8 @@ export default defineConfig({
                 'firebase-admin',
                 'firebase-admin/app',
                 'firebase-admin/firestore',
+                'cohere-ai',
+                '@qdrant/js-client-rest',
               ],
             },
           }
