@@ -1,0 +1,131 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+// Expose protected methods to renderer process
+contextBridge.exposeInMainWorld('electronAPI', {
+  // Deepgram transcription methods
+  deepgramStatus: () => ipcRenderer.invoke('deepgram-status'),
+  deepgramTranscribeAudio: (audioPath: string) =>
+    ipcRenderer.invoke('deepgram-transcribe-audio', audioPath),
+  deepgramSaveAndTranscribe: (audioBuffer: ArrayBuffer) =>
+    ipcRenderer.invoke('deepgram-save-and-transcribe', audioBuffer),
+  deepgramSendAudio: (audioBuffer: ArrayBuffer) =>
+    ipcRenderer.invoke('deepgram-send-audio', audioBuffer),
+  deepgramLiveStart: () => ipcRenderer.invoke('deepgram-live-start'),
+  deepgramLiveStop: () => ipcRenderer.invoke('deepgram-live-stop'),
+
+  // OpenAI transcription methods
+  transcribeAudio: (audioPath: string) => ipcRenderer.invoke('transcribe-audio', audioPath),
+  getTempPath: () => ipcRenderer.invoke('get-temp-path'),
+  saveAndTranscribe: (audioBuffer: ArrayBuffer) =>
+    ipcRenderer.invoke('save-and-transcribe', audioBuffer),
+  openaiStatus: () => ipcRenderer.invoke('openai-status'),
+
+  // Groq transcription methods
+  groqTranscribeAudio: (audioPath: string) =>
+    ipcRenderer.invoke('groq-transcribe-audio', audioPath),
+  groqSaveAndTranscribe: (audioBuffer: ArrayBuffer) =>
+    ipcRenderer.invoke('groq-save-and-transcribe', audioBuffer),
+  groqStatus: () => ipcRenderer.invoke('groq-status'),
+
+  // Realtime streaming methods
+  realtimeStart: () => ipcRenderer.invoke('realtime-start'),
+  realtimeSendAudio: (audioBuffer: ArrayBuffer) =>
+    ipcRenderer.invoke('realtime-send-audio', audioBuffer),
+  realtimeCommit: () => ipcRenderer.invoke('realtime-commit'),
+  realtimeStop: () => ipcRenderer.invoke('realtime-stop'),
+  realtimeStatus: () => ipcRenderer.invoke('realtime-status'),
+
+  // Realtime event listeners
+  onRealtimeTranscription: (callback: (text: string) => void) => {
+    ipcRenderer.on('realtime-transcription', (_event: any, text: string) => callback(text));
+  },
+  onRealtimeSpeechStarted: (callback: () => void) => {
+    ipcRenderer.on('realtime-speech-started', () => callback());
+  },
+  onRealtimeSpeechStopped: (callback: () => void) => {
+    ipcRenderer.on('realtime-speech-stopped', () => callback());
+  },
+  onRealtimeError: (callback: (error: string) => void) => {
+    ipcRenderer.on('realtime-error', (_event: any, error: string) => callback(error));
+  },
+  onRealtimeRateLimit: (callback: (info: any) => void) => {
+    ipcRenderer.on('realtime-rate-limit', (_event: any, info: any) => callback(info));
+  },
+
+  // TTS methods (Deepgram Aura)
+  ttsSynthesize: (text: string) => ipcRenderer.invoke('tts-synthesize', text),
+  ttsSetVoice: (voice: string) => ipcRenderer.invoke('tts-set-voice', voice),
+  ttsGetVoices: () => ipcRenderer.invoke('tts-get-voices'),
+  ttsStatus: () => ipcRenderer.invoke('tts-status'),
+
+  // Chat methods
+  chatSendMessage: (message: string) => ipcRenderer.invoke('chat-send-message', message),
+  chatClearHistory: () => ipcRenderer.invoke('chat-clear-history'),
+  chatGetHistory: () => ipcRenderer.invoke('chat-get-history'),
+  chatSetSystemPrompt: (prompt: string) => ipcRenderer.invoke('chat-set-system-prompt', prompt),
+
+  // Retrieval methods
+  retrievalSearch: (query: string, userId?: string, limit?: number) =>
+    ipcRenderer.invoke('retrieval-search', query, userId, limit),
+  retrievalSearchDocs: (query: string, limit?: number) =>
+    ipcRenderer.invoke('retrieval-search-docs', query, limit),
+  retrievalIndexDocument: (params: { content: string; source: string; title: string }) =>
+    ipcRenderer.invoke('retrieval-index-document', params),
+  retrievalIndexDocuments: (paramsList: { content: string; source: string; title: string }[]) =>
+    ipcRenderer.invoke('retrieval-index-documents', paramsList),
+  retrievalStatus: () => ipcRenderer.invoke('retrieval-status'),
+
+  // Conversation orchestrator methods
+  conversationStart: (options?: any) => ipcRenderer.invoke('conversation-start', options),
+  conversationStop: () => ipcRenderer.invoke('conversation-stop'),
+  conversationStatus: () => ipcRenderer.invoke('conversation-status'),
+  conversationStartRecording: () => ipcRenderer.invoke('conversation-start-recording'),
+
+  // Conversation event listeners
+  onUserSpoke: (callback: (text: string) => void) => {
+    ipcRenderer.on('conversation-user-spoke', (_event: any, text: string) => callback(text));
+  },
+  onAIResponse: (callback: (text: string) => void) => {
+    ipcRenderer.on('conversation-ai-response', (_event: any, text: string) => callback(text));
+  },
+  onAIAudio: (callback: (audioBuffer: ArrayBuffer) => void) => {
+    ipcRenderer.on('conversation-ai-audio', (_event: any, buffer: ArrayBuffer) => callback(buffer));
+  },
+  onConversationStateChanged: (callback: (state: string) => void) => {
+    ipcRenderer.on('conversation-state-changed', (_event: any, state: string) => callback(state));
+  },
+  onConversationError: (callback: (error: string) => void) => {
+    ipcRenderer.on('conversation-error', (_event: any, error: string) => callback(error));
+  },
+  onConversationStopped: (callback: () => void) => {
+    ipcRenderer.on('conversation-stopped', () => callback());
+  },
+  onConversationTurnComplete: (callback: () => void) => {
+    ipcRenderer.on('conversation-turn-complete', () => callback());
+  },
+  onConversationNoSpeech: (callback: () => void) => {
+    ipcRenderer.on('conversation-no-speech', () => callback());
+  },
+
+  // Deepgram event listeners
+  onDeepgramTranscript: (callback: (data: any) => void) => {
+    ipcRenderer.on('deepgram-transcript', (_event: any, data: any) => callback(data));
+  },
+  onDeepgramSpeechStarted: (callback: () => void) => {
+    ipcRenderer.on('deepgram-speech-started', () => callback());
+  },
+  onDeepgramSpeechEnded: (callback: () => void) => {
+    ipcRenderer.on('deepgram-speech-ended', () => callback());
+  },
+
+  // VS Code Agent methods
+  vscodeConnect: () => ipcRenderer.invoke('vscode-connect'),
+  vscodeDisconnect: () => ipcRenderer.invoke('vscode-disconnect'),
+  vscodeStatus: () => ipcRenderer.invoke('vscode-status'),
+  agentExecuteTask: (message: string) => ipcRenderer.invoke('agent-execute-task', message),
+
+  // Agent event listeners
+  onAgentStep: (callback: (step: any) => void) => {
+    ipcRenderer.on('agent-step', (_event: any, step: any) => callback(step));
+  },
+});

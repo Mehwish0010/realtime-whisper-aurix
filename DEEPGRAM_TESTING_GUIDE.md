@@ -11,10 +11,10 @@ User Speech → Deepgram STT → Groq Chat (LLaMA 3.3) → Text Response
 ```
 
 **Key Components:**
-- ✅ **Deepgram STT** - Real-time and file-based transcription with confidence scores
-- ✅ **Groq Chat** - AI responses using LLaMA 3.3 70B model
-- ❌ **TTS Removed** - No text-to-speech output
-- ❌ **Old STT Removed** - GrowWhisper and OpenAI Whisper removed
+-  **Deepgram STT** - Real-time and file-based transcription with confidence scores
+-  **Groq Chat** - AI responses using LLaMA 3.3 70B model
+-  **TTS Removed** - No text-to-speech output
+-  **Old STT Removed** - GrowWhisper and OpenAI Whisper removed
 
 ## Setup
 
@@ -182,30 +182,30 @@ When running in development mode, you'll see detailed logs:
 
 **Deepgram Initialization:**
 ```
-✅ Deepgram initialized successfully
+ Deepgram initialized successfully
 ```
 
 **Groq Initialization:**
 ```
-✅ Groq chat manager initialized successfully
+ Groq chat manager initialized successfully
 ```
 
 **Transcription Logs:**
 ```
-📁 Received Deepgram transcription request for: C:\...\recording_123.webm
-🎤 Starting Deepgram transcription...
-📝 Transcription result: Hello, world!
-📊 Confidence: 95.5%
-🗑️  Cleaned up temp file
+� Received Deepgram transcription request for: C:\...\recording_123.webm
+ Starting Deepgram transcription...
+ Transcription result: Hello, world!
+ Confidence: 95.5%
+�  Cleaned up temp file
 ```
 
 **Live Streaming Logs:**
 ```
-🎙️  Starting Deepgram live transcription...
-✅ Deepgram live session connected
-📝 Live transcription: Hello
-🔚 Utterance ended
-⚡ Latency: 150ms
+  Starting Deepgram live transcription...
+ Deepgram live session connected
+ Live transcription: Hello
+� Utterance ended
+ Latency: 150ms
 ```
 
 ### Confidence Color Coding
@@ -250,8 +250,8 @@ Common errors and solutions:
 The Deepgram implementation logs latency automatically:
 
 ```
-⚡ Latency: 150ms
-📊 Average latency: 175.50ms over 10 transcriptions
+ Latency: 150ms
+ Average latency: 175.50ms over 10 transcriptions
 ```
 
 ## Troubleshooting
@@ -279,43 +279,43 @@ The Deepgram implementation logs latency automatically:
 ## API Key Security
 
 **Important:**
-- ✅ `.env` is already in `.gitignore`
-- ✅ Never commit API keys to version control
-- ✅ Use `.env.example` for sharing configuration templates
-- ❌ Do not share your `.env` file
+-  `.env` is already in `.gitignore`
+-  Never commit API keys to version control
+-  Use `.env.example` for sharing configuration templates
+-  Do not share your `.env` file
 
 ## What Was Removed
 
 The following components were removed during migration:
 
 ### Removed STT Implementations:
-- ❌ `electron/groq-stt.ts` - Groq Whisper STT (replaced by Deepgram)
-- ❌ `electron/openai-stt.ts` - OpenAI Whisper STT
-- ❌ `electron/openai-realtime.ts` - OpenAI Realtime WebSocket STT
+-  `electron/groq-stt.ts` - Groq Whisper STT (replaced by Deepgram)
+-  `electron/openai-stt.ts` - OpenAI Whisper STT
+-  `electron/openai-realtime.ts` - OpenAI Realtime WebSocket STT
 
 ### Removed TTS Implementation:
-- ❌ `electron/inworld-tts.ts` - Inworld TTS
+-  `electron/inworld-tts.ts` - Inworld TTS
 
 ### Removed Chat Implementation:
-- ❌ `electron/openai-chat.ts` - OpenAI GPT chat
+-  `electron/openai-chat.ts` - OpenAI GPT chat
 
 ### Removed IPC Handlers:
-- ❌ `transcribe-audio` (OpenAI)
-- ❌ `save-and-transcribe` (OpenAI)
-- ❌ `groq-transcribe-audio`
-- ❌ `groq-save-and-transcribe`
-- ❌ `realtime-start`
-- ❌ `realtime-send-audio`
-- ❌ `realtime-commit`
-- ❌ `realtime-stop`
-- ❌ `realtime-status`
-- ❌ `tts-synthesize`
-- ❌ `tts-status`
-- ❌ `conversation-*` handlers (orchestrator removed)
+-  `transcribe-audio` (OpenAI)
+-  `save-and-transcribe` (OpenAI)
+-  `groq-transcribe-audio`
+-  `groq-save-and-transcribe`
+-  `realtime-start`
+-  `realtime-send-audio`
+-  `realtime-commit`
+-  `realtime-stop`
+-  `realtime-status`
+-  `tts-synthesize`
+-  `tts-status`
+-  `conversation-*` handlers (orchestrator removed)
 
 ### Removed Dependencies:
-- ❌ `groq-sdk` (chat still uses Groq, just not STT)
-- ❌ `openai`
+-  `groq-sdk` (chat still uses Groq, just not STT)
+-  `openai`
 
 ## Next Steps
 
@@ -341,6 +341,6 @@ The following components were removed during migration:
 
 ---
 
-**Status:** ✅ Ready for testing!
+**Status:**  Ready for testing!
 
 Make sure to replace the API keys in `.env` before running the application.
