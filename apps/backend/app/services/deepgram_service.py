@@ -2,9 +2,8 @@
 Deepgram STT/TTS Service
 """
 
-from deepgram import DeepgramClient
+from deepgram import DeepgramClient, PrerecordedOptions, SpeakOptions
 from app.core.config import settings
-import base64
 
 
 class DeepgramService:
@@ -24,29 +23,38 @@ class DeepgramService:
             dict with transcript and metadata
         """
         try:
-            # Simple version - adjust based on actual Deepgram SDK v6 API
-            options = {
-                "model": "nova-2",
-                "smart_format": True,
-                "language": "en",
-            }
+            options = PrerecordedOptions(
+                model="nova-2",
+                smart_format=True,
+                language="en",
+            )
 
-            # Placeholder - update with actual SDK v6 syntax
-            # response = self.client.listen.prerecorded.v("1").transcribe_file(
-            #     {"buffer": audio_data},
-            #     options
-            # )
+            payload = {"buffer": audio_data}
+            response = self.client.listen.rest.v("1").transcribe_file(payload, options)
+
+            result = response.results
+            transcript = result.channels[0].alternatives[0].transcript
+            confidence = result.channels[0].alternatives[0].confidence
+            words = [
+                {
+                    "word": w.word,
+                    "start": w.start,
+                    "end": w.end,
+                    "confidence": w.confidence,
+                }
+                for w in (result.channels[0].alternatives[0].words or [])
+            ]
 
             return {
-                "transcript": "Test transcript",
-                "confidence": 0.95,
-                "words": []
+                "transcript": transcript,
+                "confidence": confidence,
+                "words": words,
             }
 
         except Exception as e:
             raise Exception(f"Transcription failed: {str(e)}")
 
-    async def text_to_speech(self, text: str, voice: str = "aura-asteria-en") -> str:
+    async def text_to_speech(self, text: str, voice: str = "aura-asteria-en") -> bytes:
         """
         Convert text to speech
 
@@ -55,15 +63,13 @@ class DeepgramService:
             voice: Voice model to use
 
         Returns:
-            Base64 encoded audio data
+            Raw audio bytes (mp3)
         """
         try:
-            # Placeholder - update with actual SDK v6 syntax
-            # options = {"model": voice}
-            # response = self.client.speak.v("1").stream({"text": text}, options)
-
-            # Return placeholder
-            return base64.b64encode(b"audio_data_placeholder").decode('utf-8')
+            options = SpeakOptions(model=voice)
+            speak_source = {"text": text}
+            response = self.client.speak.rest.v("1").stream_memory(speak_source, options)
+            return response.stream_memory.getbuffer().tobytes()
 
         except Exception as e:
             raise Exception(f"TTS failed: {str(e)}")

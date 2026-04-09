@@ -3,6 +3,7 @@ Deepgram STT/TTS Endpoints
 """
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import Response
 from app.models.schemas import TranscriptionResponse, TTSRequest
 from app.services.deepgram_service import DeepgramService
 
@@ -27,14 +28,14 @@ async def transcribe_audio(file: UploadFile = File(...)):
 async def text_to_speech(request: TTSRequest):
     """
     Convert text to speech
-    Returns audio data
+    Returns binary audio data (audio/mpeg)
     """
     try:
-        audio_data = await deepgram_service.text_to_speech(
+        audio_bytes = await deepgram_service.text_to_speech(
             text=request.text,
             voice=request.voice
         )
-        return {"audio": audio_data, "status": "success"}
+        return Response(content=audio_bytes, media_type="audio/mpeg")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

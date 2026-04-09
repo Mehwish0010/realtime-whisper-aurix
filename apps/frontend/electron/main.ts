@@ -5,15 +5,8 @@ import dotenv from 'dotenv';
 import fs from 'fs/promises';
 import Groq from 'groq-sdk';
 import { db } from '../src/lib/firebase-admin.ts';
-import { initializeDeepgram, getDeepgramInstance, transcribeAudioFile } from './deepgram-stt.js';
+import { initializeDeepgram, getDeepgramInstance } from './deepgram-stt.js';
 import { createGroqConversationManager, getGroqConversationManager } from './groq-chat.js';
-import {
-  initializeDeepgramTTS,
-  getDeepgramTTSInstance,
-  synthesizeSpeech,
-  AURA_VOICES,
-  type AuraVoice,
-} from './deepgram-tts.js';
 import firebaseAdmin from 'firebase-admin';
 import { initializeEmbeddingService, getEmbeddingService } from './embedding-service.js';
 import {
@@ -42,6 +35,8 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const BACKEND_URL = 'http://localhost:8000';
+let currentTTSVoice = 'aura-perseus-en';
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow() {
@@ -69,7 +64,7 @@ function createWindow() {
             "style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data: https:; " +
             "media-src 'self' blob: mediastream:; " +
-            "connect-src 'self' https://api.deepgram.com wss://api.deepgram.com https://api.groq.com ws://localhost:9877; " +
+            "connect-src 'self' https://api.deepgram.com wss://api.deepgram.com https://api.groq.com ws://localhost:9877 http://localhost:8000; " +
             "font-src 'self'; " +
             "worker-src 'self' blob:;",
         ],
@@ -120,14 +115,10 @@ app.whenReady().then(async () => {
     console.warn('Get your API key from: https://console.deepgram.com/');
   } else {
     try {
-      // Initialize STT
+      // Initialize STT (live streaming still uses direct WebSocket)
       const deepgram = initializeDeepgram(deepgramApiKey);
       await deepgram.initialize();
-      console.log('Deepgram STT initialized successfully');
-
-      // Initialize TTS with Perseus voice (natural male)
-      initializeDeepgramTTS(deepgramApiKey, 'perseus');
-      console.log('Deepgram TTS initialized successfully');
+      console.log('Deepgram STT initialized successfully (live streaming)');
     } catch (error) {
       console.error('Failed to initialize Deepgram:', error);
     }
@@ -201,15 +192,6 @@ async function getTempDir(): Promise<string> {
   return tempDir;
 }
 
-// Helper function to save audio buffer to file
-async function saveAudioFile(audioBuffer: ArrayBuffer, filename: string): Promise<string> {
-  const tempDir = await getTempDir();
-  const filePath = path.join(tempDir, filename);
-  const buffer = Buffer.from(audioBuffer);
-  await fs.writeFile(filePath, buffer);
-  return filePath;
-}
-
 // Deepgram IPC Handlers
 
 // Get temp path
@@ -223,33 +205,45 @@ ipcMain.handle('get-temp-path', async () => {
   }
 });
 
-// Check Deepgram status
+// Check Deepgram status (via backend health)
 ipcMain.handle('deepgram-status', async () => {
-  const deepgram = getDeepgramInstance();
-  if (!deepgram) {
+  try {
+    const response = await fetch(`${BACKEND_URL}/health`);
+    if (!response.ok) throw new Error('Backend not reachable');
+    const data = (await response.json()) as { status: string };
+    return {
+      success: true,
+      initialized: data.status === 'healthy',
+      status: data.status,
+    };
+  } catch (error: any) {
     return {
       success: false,
-      error: 'Deepgram not initialized',
+      error: error.message || 'Backend not reachable',
     };
   }
-  const status = deepgram.getStatus();
-  return {
-    success: true,
-    ...status,
-  };
 });
 
-// Transcribe audio file (Deepgram)
+// Transcribe audio file (via backend)
 ipcMain.handle('deepgram-transcribe-audio', async (_event, audioPath: string) => {
   try {
-    console.log('Received Deepgram transcription request for:', audioPath);
+    console.log('Received transcription request for:', audioPath);
 
-    const deepgram = getDeepgramInstance();
-    if (!deepgram) {
-      throw new Error('Deepgram not initialized. Please check your API key in .env file.');
+    const audioData = await fs.readFile(audioPath);
+    const formData = new FormData();
+    formData.append('file', new Blob([audioData]), path.basename(audioPath));
+
+    const response = await fetch(`${BACKEND_URL}/api/v1/deepgram/transcribe`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = (await response.json()) as { detail?: string };
+      throw new Error(err.detail || 'Transcription failed');
     }
 
-    const result = await transcribeAudioFile(audioPath);
+    const result = (await response.json()) as { transcript: string; confidence: number; words: any[] };
 
     // Clean up the temp file after transcription
     try {
@@ -266,7 +260,7 @@ ipcMain.handle('deepgram-transcribe-audio', async (_event, audioPath: string) =>
       words: result.words,
     };
   } catch (error: any) {
-    console.error('Deepgram transcription error:', error);
+    console.error('Transcription error:', error);
     return {
       success: false,
       error: error.message || 'Unknown error occurred',
@@ -274,34 +268,33 @@ ipcMain.handle('deepgram-transcribe-audio', async (_event, audioPath: string) =>
   }
 });
 
-// Save audio buffer and transcribe (Deepgram)
+// Save audio buffer and transcribe (via backend)
 ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: ArrayBuffer) => {
   try {
-    console.log('Received audio buffer for Deepgram, size:', audioBuffer.byteLength, 'bytes');
-
-    const deepgram = getDeepgramInstance();
-    if (!deepgram) {
-      throw new Error('Deepgram not initialized. Please check your API key in .env file.');
-    }
+    console.log('Received audio buffer, size:', audioBuffer.byteLength, 'bytes');
 
     // Validate audio buffer size
     if (audioBuffer.byteLength < 1000) {
       throw new Error('Audio file too small. Recording may have failed. Please try again.');
     }
 
-    console.log('Audio buffer validated:', audioBuffer.byteLength, 'bytes');
+    // Send to backend for transcription
+    const formData = new FormData();
+    formData.append('file', new Blob([audioBuffer]), `recording_${Date.now()}.webm`);
 
-    // Save audio buffer to temp file
-    const timestamp = Date.now();
-    const filename = `recording_${timestamp}.webm`;
-    const audioPath = await saveAudioFile(audioBuffer, filename);
-    console.log('Saved audio file to:', audioPath);
+    const response = await fetch(`${BACKEND_URL}/api/v1/deepgram/transcribe`, {
+      method: 'POST',
+      body: formData,
+    });
 
-    // Transcribe the audio
-    console.log('¤ Starting Deepgram transcription...');
-    const result = await transcribeAudioFile(audioPath);
-    console.log(' Transcription result:', result.transcript);
-    console.log('Š Confidence:', (result.confidence * 100).toFixed(1) + '%');
+    if (!response.ok) {
+      const err = (await response.json()) as { detail?: string };
+      throw new Error(err.detail || 'Transcription failed');
+    }
+
+    const result = (await response.json()) as { transcript: string; confidence: number; words: any[] };
+    console.log('Transcription result:', result.transcript);
+    console.log('Confidence:', ((result.confidence ?? 0) * 100).toFixed(1) + '%');
 
     try {
       await db
@@ -321,14 +314,6 @@ ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: Array
       console.log('Failed to save in database: ', error);
     }
 
-    // Clean up the temp file
-    try {
-      await fs.unlink(audioPath);
-      console.log('Cleaned up temp file:', audioPath);
-    } catch (cleanupError) {
-      console.warn('Failed to clean up temp file:', cleanupError);
-    }
-
     return {
       success: true,
       text: result.transcript,
@@ -336,7 +321,7 @@ ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: Array
       words: result.words,
     };
   } catch (error: any) {
-    console.error(' Deepgram save and transcribe error:', error);
+    console.error('Save and transcribe error:', error);
     return {
       success: false,
       error: error.message || 'Unknown error occurred',
@@ -370,14 +355,14 @@ ipcMain.handle('deepgram-live-start', async () => {
     });
 
     deepgram.on('speechStarted', () => {
-      console.log('¤ Speech started');
+      console.log('ï¿½ Speech started');
       if (mainWindow) {
         mainWindow.webContents.send('deepgram-speech-started');
       }
     });
 
     deepgram.on('utteranceEnd', () => {
-      console.log('š Utterance ended');
+      console.log('ï¿½ Utterance ended');
       if (mainWindow) {
         mainWindow.webContents.send('deepgram-utterance-end');
       }
@@ -604,26 +589,28 @@ ipcMain.handle('chat-set-system-prompt', async (_event, prompt: string) => {
 
 ipcMain.handle('tts-synthesize', async (_event, text: string) => {
   try {
-    console.log('Š TTS request:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
+    console.log('TTS request:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
 
-    const tts = getDeepgramTTSInstance();
-    if (!tts || !tts.isInitialized()) {
-      throw new Error('Deepgram TTS not initialized');
+    const response = await fetch(`${BACKEND_URL}/api/v1/deepgram/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice: currentTTSVoice }),
+    });
+
+    if (!response.ok) {
+      const err = (await response.json()) as { detail?: string };
+      throw new Error(err.detail || 'TTS synthesis failed');
     }
 
-    const audioBuffer = await synthesizeSpeech(text);
-    console.log(' TTS audio generated:', audioBuffer.length, 'bytes');
+    const audioArrayBuffer = await response.arrayBuffer();
+    console.log('TTS audio received:', audioArrayBuffer.byteLength, 'bytes');
 
-    // Return as ArrayBuffer for the renderer
     return {
       success: true,
-      audio: audioBuffer.buffer.slice(
-        audioBuffer.byteOffset,
-        audioBuffer.byteOffset + audioBuffer.byteLength,
-      ),
+      audio: audioArrayBuffer,
     };
   } catch (error: any) {
-    console.error(' TTS error:', error);
+    console.error('TTS error:', error);
     return {
       success: false,
       error: error.message || 'TTS synthesis failed',
@@ -633,17 +620,11 @@ ipcMain.handle('tts-synthesize', async (_event, text: string) => {
 
 ipcMain.handle('tts-set-voice', async (_event, voice: string) => {
   try {
-    const tts = getDeepgramTTSInstance();
-    if (!tts) {
-      throw new Error('Deepgram TTS not initialized');
-    }
-
-    tts.setVoice(voice as AuraVoice);
-    console.log(' TTS voice changed to:', voice);
-
+    currentTTSVoice = voice;
+    console.log('TTS voice changed to:', voice);
     return { success: true, voice };
   } catch (error: any) {
-    console.error(' TTS set voice error:', error);
+    console.error('TTS set voice error:', error);
     return {
       success: false,
       error: error.message,
@@ -653,9 +634,12 @@ ipcMain.handle('tts-set-voice', async (_event, voice: string) => {
 
 ipcMain.handle('tts-get-voices', async () => {
   try {
+    const response = await fetch(`${BACKEND_URL}/api/v1/deepgram/voices`);
+    if (!response.ok) throw new Error('Failed to fetch voices');
+    const data = (await response.json()) as { voices: string[] };
     return {
       success: true,
-      voices: AURA_VOICES,
+      voices: data.voices,
     };
   } catch (error: any) {
     return {
@@ -666,18 +650,20 @@ ipcMain.handle('tts-get-voices', async () => {
 });
 
 ipcMain.handle('tts-status', async () => {
-  const tts = getDeepgramTTSInstance();
-  if (!tts || !tts.isInitialized()) {
+  try {
+    const response = await fetch(`${BACKEND_URL}/health`);
+    if (!response.ok) throw new Error('Backend not reachable');
+    return {
+      success: true,
+      initialized: true,
+      voice: currentTTSVoice,
+    };
+  } catch (error: any) {
     return {
       success: false,
-      error: 'Deepgram TTS not initialized',
+      error: error.message || 'Backend not reachable',
     };
   }
-  return {
-    success: true,
-    initialized: true,
-    voice: tts.getVoice(),
-  };
 });
 
 // Retrieval IPC Handlers
