@@ -52,6 +52,46 @@ class ChatResponse(BaseModel):
     usage: Optional[Dict[str, int]] = None
 
 
+class SimpleMessageRequest(BaseModel):
+    """Request model for simple chat (backend manages history)"""
+    message: str
+
+
+class SystemPromptRequest(BaseModel):
+    """Request model for setting system prompt"""
+    prompt: str
+
+
+class AgentToolDefinition(BaseModel):
+    """Tool definition for agent mode"""
+    type: str = "function"
+    function: Dict[str, Any]
+
+
+class AgentRequest(BaseModel):
+    """Request model for agent mode"""
+    message: str
+    tools: List[Dict[str, Any]]
+
+
+class AgentToolResult(BaseModel):
+    """Single tool result"""
+    tool_call_id: str
+    result: Any
+
+
+class AgentToolResultsRequest(BaseModel):
+    """Request model for submitting tool results"""
+    tool_results: List[AgentToolResult]
+
+
+class AgentResponse(BaseModel):
+    """Response model for agent mode"""
+    type: str  # "final" or "tool_calls"
+    response: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+
+
 # RAG Models
 class EmbeddingRequest(BaseModel):
     """Request for generating embeddings"""

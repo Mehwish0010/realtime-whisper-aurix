@@ -3,10 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import fs from 'fs/promises';
-import Groq from 'groq-sdk';
 import { db } from '../src/lib/firebase-admin.ts';
 import { initializeDeepgram, getDeepgramInstance } from './deepgram-stt.js';
-import { createGroqConversationManager, getGroqConversationManager } from './groq-chat.js';
 import firebaseAdmin from 'firebase-admin';
 import { initializeEmbeddingService, getEmbeddingService } from './embedding-service.js';
 import {
@@ -38,6 +36,18 @@ const __dirname = path.dirname(__filename);
 const BACKEND_URL = 'http://localhost:8000';
 let currentTTSVoice = 'aura-perseus-en';
 let mainWindow: BrowserWindow | null = null;
+
+/** Extract a human-readable error string from a backend JSON response body */
+async function extractBackendError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === 'string') return body.detail;
+    if (body?.detail) return JSON.stringify(body.detail);
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -121,32 +131,6 @@ app.whenReady().then(async () => {
       console.log('Deepgram STT initialized successfully (live streaming)');
     } catch (error) {
       console.error('Failed to initialize Deepgram:', error);
-    }
-  }
-
-  // Initialize Groq Chat
-  const groqApiKey = process.env.GROQ_API_KEY;
-
-  if (!groqApiKey || groqApiKey === 'your-groq-api-key-here') {
-    console.warn('WARNING: GROQ_API_KEY not set in .env file');
-    console.warn('Groq Chat will not be available');
-    console.warn('Get your API key from: https://console.groq.com/keys');
-  } else {
-    try {
-      // Create Groq client for chat
-      const groqClient = new Groq({ apiKey: groqApiKey });
-
-      // Initialize Groq chat manager
-      createGroqConversationManager(groqClient, {
-        systemPrompt:
-          'You are a helpful voice assistant. Provide clear, concise, and friendly responses.',
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.7,
-        maxTokens: 1000,
-      });
-      console.log('Groq chat manager initialized successfully');
-    } catch (error) {
-      console.error('Failed to initialize Groq:', error);
     }
   }
 
@@ -455,12 +439,6 @@ ipcMain.handle('chat-send-message', async (_event, message: string) => {
   try {
     console.log('Chat message received:', message);
 
-    const chatManager = getGroqConversationManager();
-
-    if (!chatManager.isInitialized()) {
-      throw new Error('Groq chat manager not initialized.');
-    }
-
     // RAG: retrieve relevant context and prepend to message
     let augmentedMessage = message;
     if (isRetrievalReady()) {
@@ -476,7 +454,21 @@ ipcMain.handle('chat-send-message', async (_event, message: string) => {
       }
     }
 
-    const response = await chatManager.sendMessage(augmentedMessage);
+    // Send to backend (backend manages history)
+    const backendResponse = await fetch(`${BACKEND_URL}/api/v1/groq/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: augmentedMessage }),
+    });
+
+    if (!backendResponse.ok) {
+      const errorMsg = await extractBackendError(backendResponse, 'Chat request failed');
+      console.error('Backend chat error:', backendResponse.status, errorMsg);
+      throw new Error(errorMsg);
+    }
+
+    const data = (await backendResponse.json()) as { message: string; role: string; usage?: any };
+    const response = data.message;
 
     // RAG: index user message and AI response
     if (isRetrievalReady()) {
@@ -535,53 +527,56 @@ ipcMain.handle('chat-send-message', async (_event, message: string) => {
 
 ipcMain.handle('chat-clear-history', async () => {
   try {
-    const chatManager = getGroqConversationManager();
-    chatManager.clearHistory();
+    const response = await fetch(`${BACKEND_URL}/api/v1/groq/chat/history`, {
+      method: 'DELETE',
+    });
 
-    return {
-      success: true,
-    };
+    if (!response.ok) {
+      const errorMsg = await extractBackendError(response, 'Failed to clear history');
+      throw new Error(errorMsg);
+    }
+
+    return { success: true };
   } catch (error: any) {
     console.error('Clear history error:', error);
-    return {
-      success: false,
-      error: error.message,
-    };
+    return { success: false, error: error.message };
   }
 });
 
 ipcMain.handle('chat-get-history', async () => {
   try {
-    const chatManager = getGroqConversationManager();
-    const history = chatManager.getHistory();
+    const response = await fetch(`${BACKEND_URL}/api/v1/groq/chat/history`);
 
-    return {
-      success: true,
-      history: history,
-    };
+    if (!response.ok) {
+      const errorMsg = await extractBackendError(response, 'Failed to get history');
+      throw new Error(errorMsg);
+    }
+
+    const data = (await response.json()) as { history: any[] };
+    return { success: true, history: data.history };
   } catch (error: any) {
     console.error('Get history error:', error);
-    return {
-      success: false,
-      error: error.message,
-    };
+    return { success: false, error: error.message };
   }
 });
 
 ipcMain.handle('chat-set-system-prompt', async (_event, prompt: string) => {
   try {
-    const chatManager = getGroqConversationManager();
-    chatManager.setSystemPrompt(prompt);
+    const response = await fetch(`${BACKEND_URL}/api/v1/groq/chat/system-prompt`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt }),
+    });
 
-    return {
-      success: true,
-    };
+    if (!response.ok) {
+      const errorMsg = await extractBackendError(response, 'Failed to set system prompt');
+      throw new Error(errorMsg);
+    }
+
+    return { success: true };
   } catch (error: any) {
     console.error('Set system prompt error:', error);
-    return {
-      success: false,
-      error: error.message,
-    };
+    return { success: false, error: error.message };
   }
 });
 
@@ -770,50 +765,97 @@ ipcMain.handle('agent-execute-task', async (_event, message: string) => {
       );
     }
 
-    const chatManager = getGroqConversationManager();
-    if (!chatManager.isInitialized()) {
-      throw new Error('Groq chat not initialized.');
-    }
+    // Set agent system prompt on backend before starting
+    await fetch(`${BACKEND_URL}/api/v1/groq/chat/system-prompt`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: AGENT_SYSTEM_PROMPT }),
+    });
 
-    // Save original config, clear history, switch to agent mode
-    const originalConfig = chatManager.getConfig();
-    chatManager.clearHistory();
-    chatManager.setSystemPrompt(AGENT_SYSTEM_PROMPT);
-    chatManager.updateConfig({ model: AGENT_MODEL });
+    // Clear history for fresh agent session
+    await fetch(`${BACKEND_URL}/api/v1/groq/chat/history`, { method: 'DELETE' });
 
     const steps: Array<{ tool: string; args: any; result: any }> = [];
 
-    const response = await chatManager.sendAgentMessage(
-      message,
-      AGENT_TOOLS,
-      async (toolName, args) => {
-        // Execute tool via VS Code bridge
-        const result = await bridge.sendCommand(toolName, args);
+    // Step 1: Send initial agent message to backend
+    let agentResponse = await fetch(`${BACKEND_URL}/api/v1/groq/chat/agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, tools: AGENT_TOOLS }),
+    });
+
+    if (!agentResponse.ok) {
+      const errorMsg = await extractBackendError(agentResponse, 'Agent request failed');
+      throw new Error(errorMsg);
+    }
+
+    let result = (await agentResponse.json()) as {
+      type: string;
+      response?: string;
+      tool_calls?: Array<{ id: string; name: string; arguments: any }>;
+    };
+
+    // Step 2-5: Loop until final text response
+    while (result.type === 'tool_calls' && result.tool_calls) {
+      const toolResults: Array<{ tool_call_id: string; result: any }> = [];
+
+      // Execute each tool call via VS Code bridge
+      for (const toolCall of result.tool_calls) {
+        let toolResult: any;
+        try {
+          toolResult = await bridge.sendCommand(toolCall.name, toolCall.arguments);
+        } catch (err: any) {
+          toolResult = { error: err.message };
+        }
+
+        // Track step
+        const step = { tool: toolCall.name, args: toolCall.arguments, result: toolResult };
+        steps.push(step);
 
         // Notify renderer about the step in real-time
         if (mainWindow) {
           mainWindow.webContents.send('agent-step', {
-            tool: toolName,
-            args,
-            result,
+            tool: toolCall.name,
+            args: toolCall.arguments,
+            result: toolResult,
             timestamp: Date.now(),
           });
         }
 
-        return result;
-      },
-      (step) => {
-        steps.push(step);
-      },
-    );
+        toolResults.push({ tool_call_id: toolCall.id, result: toolResult });
+      }
 
-    // Restore original config
-    chatManager.setSystemPrompt(originalConfig.systemPrompt || '');
-    chatManager.updateConfig({ model: originalConfig.model });
+      // Submit tool results back to backend
+      agentResponse = await fetch(`${BACKEND_URL}/api/v1/groq/chat/agent/tool-results`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool_results: toolResults }),
+      });
+
+      if (!agentResponse.ok) {
+        const errorMsg = await extractBackendError(agentResponse, 'Agent tool results submission failed');
+        throw new Error(errorMsg);
+      }
+
+      result = (await agentResponse.json()) as {
+        type: string;
+        response?: string;
+        tool_calls?: Array<{ id: string; name: string; arguments: any }>;
+      };
+    }
+
+    // Restore default system prompt
+    await fetch(`${BACKEND_URL}/api/v1/groq/chat/system-prompt`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'You are a helpful voice assistant. Provide clear, concise, and friendly responses.',
+      }),
+    });
 
     return {
       success: true,
-      response,
+      response: result.response || 'Done.',
       steps,
     };
   } catch (error: any) {
