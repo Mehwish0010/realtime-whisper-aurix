@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
+    # OpenRouter Configuration (for Agent mode)
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+
     # Cohere Configuration (for embeddings)
     COHERE_API_KEY: str = os.getenv("COHERE_API_KEY", "")
 

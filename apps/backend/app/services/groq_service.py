@@ -1,10 +1,12 @@
 """
 Groq Chat Service — full conversation management (moved from Electron)
+Agent mode uses OpenRouter (Nemotron 3) for better coding/tool calling.
 """
 
 import json
 import logging
 from groq import Groq
+from openai import OpenAI
 from app.core.config import settings
 from typing import List, Dict, Any, Optional
 
@@ -14,9 +16,12 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful voice assistant. Provide clear, concise, and friendly responses."
 )
 
+AGENT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
+
 
 class GroqService:
-    """Service for Groq chat completions with conversation history management"""
+    """Service for Groq chat completions with conversation history management.
+    Agent mode uses OpenRouter (Nemotron 3) for better tool calling."""
 
     def __init__(self):
         self.client = Groq(api_key=settings.GROQ_API_KEY)
@@ -24,6 +29,13 @@ class GroqService:
         self.temperature = 0.7
         self.max_tokens = 1000
         self.max_history_length = 20
+
+        # OpenRouter client for agent mode (Nemotron 3)
+        self.agent_client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.OPENROUTER_API_KEY,
+        )
+        self.agent_model = AGENT_MODEL
 
         # Conversation history
         self.conversation_history: List[Dict[str, Any]] = [
@@ -140,15 +152,16 @@ class GroqService:
     def _agent_completion(
         self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]
     ) -> dict:
-        """Run one agent completion step. May loop up to 10 times for consecutive tool calls."""
+        """Run one agent completion step using OpenRouter (Nemotron 3)."""
         for iteration in range(10):
             logger.info(
-                "Agent loop iteration %d, messages: %d", iteration + 1, len(messages)
+                "Agent loop iteration %d, messages: %d (model: %s)",
+                iteration + 1, len(messages), self.agent_model,
             )
 
             try:
-                completion = self.client.chat.completions.create(
-                    model=self.model,
+                completion = self.agent_client.chat.completions.create(
+                    model=self.agent_model,
                     messages=messages,
                     tools=tools,
                     tool_choice="auto",
@@ -156,12 +169,12 @@ class GroqService:
                     max_tokens=self.max_tokens,
                 )
             except Exception as err:
-                # Groq tool_use_failed — retry without tools
+                # tool_use_failed — retry without tools
                 err_msg = str(err)
                 if "tool_use_failed" in err_msg:
                     logger.warning("Tool call failed, retrying without tools...")
-                    fallback = self.client.chat.completions.create(
-                        model=self.model,
+                    fallback = self.agent_client.chat.completions.create(
+                        model=self.agent_model,
                         messages=messages,
                         temperature=0.3,
                         max_tokens=self.max_tokens,

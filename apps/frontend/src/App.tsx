@@ -59,7 +59,7 @@ function App() {
       window.speechSynthesis.getVoices();
       window.speechSynthesis.onvoiceschanged = () => {
         const voices = window.speechSynthesis.getVoices();
-        console.log('ä Available TTS voices:', voices.length);
+        console.log('ÔøΩ Available TTS voices:', voices.length);
       };
     }
 
@@ -80,11 +80,11 @@ function App() {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       const devices = await navigator.mediaDevices.enumerateDevices();
       const mics = devices.filter((device) => device.kind === 'audioinput');
-      console.log('§ Available microphones:', mics);
+      console.log('ÔøΩ Available microphones:', mics);
       setAvailableMics(mics);
       if (mics.length > 0 && !selectedMicId) {
         setSelectedMicId(mics[0].deviceId);
-        console.log('ç Default mic selected:', mics[0].label);
+        console.log('ÔøΩ Default mic selected:', mics[0].label);
       }
     } catch (error) {
       console.error('Error listing microphones:', error);
@@ -93,14 +93,14 @@ function App() {
 
   const testMicrophone = async () => {
     try {
-      console.log('™ Testing microphone...');
+      console.log('ÔøΩ Testing microphone...');
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: selectedMicId ? { deviceId: { exact: selectedMicId } } : true,
       });
 
       const track = stream.getAudioTracks()[0];
       console.log('Microphone connected:', track.label);
-      console.log('ä Settings:', track.getSettings());
+      console.log('ÔøΩ Settings:', track.getSettings());
 
       // Create audio context to check levels
       const audioContext = new AudioContext();
@@ -111,7 +111,7 @@ function App() {
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-      console.log('ä Speak into your microphone for 3 seconds...');
+      console.log('ÔøΩ Speak into your microphone for 3 seconds...');
       let maxLevel = 0;
       const testInterval = setInterval(() => {
         analyser.getByteFrequencyData(dataArray);
@@ -191,11 +191,11 @@ function App() {
 
         if (englishVoice) {
           utterance.voice = englishVoice;
-          console.log('ä Using voice:', englishVoice.name);
+          console.log('ÔøΩ Using voice:', englishVoice.name);
         }
 
         utterance.onstart = () => {
-          console.log('ä Started speaking');
+          console.log('ÔøΩ Started speaking');
           setConversationState('ai_speaking');
         };
 
@@ -211,7 +211,7 @@ function App() {
           reject(new Error(`Speech synthesis error: ${event.error}`));
         };
 
-        console.log('ä Speaking AI response...');
+        console.log('ÔøΩ Speaking AI response...');
         window.speechSynthesis.speak(utterance);
       } catch (error) {
         console.error('Speech synthesis failed:', error);
@@ -404,7 +404,7 @@ function App() {
             maxAudioLevel = roundedLevel;
           }
           console.log(
-            '§ Audio level:',
+            'ÔøΩ Audio level:',
             roundedLevel,
             '(freq:',
             Math.round(frequencyAvg),
@@ -472,9 +472,9 @@ function App() {
 
           const userText = transcriptResult.text.trim();
           const confidence = transcriptResult.confidence || 0;
-          console.log('ù Transcription received:', userText);
-          console.log('ä Confidence:', (confidence * 100).toFixed(1) + '%');
-          console.log('ù Transcription length:', userText.length, 'characters');
+          console.log('ÔøΩ Transcription received:', userText);
+          console.log('ÔøΩ Confidence:', (confidence * 100).toFixed(1) + '%');
+          console.log('ÔøΩ Transcription length:', userText.length, 'characters');
 
           if (!userText || userText.length < 2) {
             console.warn(' Warning: Transcription is very short or empty');
@@ -510,7 +510,7 @@ function App() {
               throw new Error(agentResult.error || 'Agent execution failed');
             }
             aiResponse = agentResult.response;
-            console.log('ñ Agent response:', aiResponse, 'Steps:', agentResult.steps?.length || 0);
+            console.log('ÔøΩ Agent response:', aiResponse, 'Steps:', agentResult.steps?.length || 0);
           } else {
             setConversationState('ai_thinking');
             setStatus('AI is thinking (Groq LLaMA 3.3)...');
@@ -519,7 +519,7 @@ function App() {
               throw new Error(chatResult.error || 'Failed to get AI response');
             }
             aiResponse = chatResult.response;
-            console.log('ñ AI response:', aiResponse);
+            console.log('ÔøΩ AI response:', aiResponse);
           }
           setConversationHistory((prev) => [
             ...prev,
@@ -544,7 +544,7 @@ function App() {
           // Clean up interval
           if (levelInterval) {
             clearInterval(levelInterval);
-            console.log('ë Audio monitoring stopped');
+            console.log('ÔøΩ Audio monitoring stopped');
           }
           // Clean up stream
           if (streamRef.current) {
@@ -565,7 +565,7 @@ function App() {
         console.log('Timeout reached, stopping recording. State:', mediaRecorder.state);
         if (levelInterval) {
           clearInterval(levelInterval);
-          console.log('ë Audio monitoring stopped (timeout)');
+          console.log('ÔøΩ Audio monitoring stopped (timeout)');
         }
         if (mediaRecorder.state === 'recording') {
           mediaRecorder.stop();
@@ -681,7 +681,7 @@ function App() {
               marginBottom: '10px',
             }}
           >
-            ™ Test Microphone (3 sec)
+            ÔøΩ Test Microphone (3 sec)
           </button>
           <button
             onClick={() => setTtsEnabled(!ttsEnabled)}
@@ -698,7 +698,7 @@ function App() {
               transition: 'all 0.3s ease',
             }}
           >
-            {ttsEnabled ? 'ä Voice Response: ON' : 'á Voice Response: OFF'}
+            {ttsEnabled ? 'ÔøΩ Voice Response: ON' : 'ÔøΩ Voice Response: OFF'}
           </button>
           <button
             onClick={toggleAgentMode}
@@ -726,7 +726,7 @@ function App() {
         {conversationState === 'listening' && (
           <div style={{ marginBottom: '20px' }}>
             <div style={{ fontSize: '12px', color: '#666', marginBottom: '5px' }}>
-              Audio Level: {audioLevel > 10 ? 'ä' : 'á'} {audioLevel}
+              Audio Level: {audioLevel > 10 ? 'ÔøΩ' : 'ÔøΩ'} {audioLevel}
             </div>
             <div
               style={{
@@ -760,20 +760,20 @@ function App() {
           }}
         >
           {!deepgramStatus?.initialized && 'Setting up...'}
-          {deepgramStatus?.initialized && isInitializing && 'Ñ Initializing...'}
+          {deepgramStatus?.initialized && isInitializing && 'ÔøΩ Initializing...'}
           {deepgramStatus?.initialized &&
             !isInitializing &&
             !conversationActive &&
-            'Ü Click to start'}
+            'ÔøΩ Click to start'}
           {deepgramStatus?.initialized &&
             !isInitializing &&
             conversationActive &&
             conversationState === 'idle' &&
-            '§ Click to record'}
-          {conversationState === 'listening' && 'ô Recording... (5 seconds)'}
-          {conversationState === 'transcribing' && 'Ñ Processing with Deepgram...'}
-          {conversationState === 'ai_thinking' && 'î Groq AI thinking...'}
-          {conversationState === 'ai_speaking' && 'ä AI speaking...'}
+            'ÔøΩ Click to record'}
+          {conversationState === 'listening' && 'ÔøΩ Recording... (5 seconds)'}
+          {conversationState === 'transcribing' && 'ÔøΩ Processing with Deepgram...'}
+          {conversationState === 'ai_thinking' && 'ÔøΩ Groq AI thinking...'}
+          {conversationState === 'ai_speaking' && 'ÔøΩ AI speaking...'}
         </div>
 
         {/* Main Button */}
@@ -838,7 +838,7 @@ function App() {
             }
           }}
         >
-          ô
+          ÔøΩ
         </button>
 
         {/* Small End Conversation Button */}
@@ -973,7 +973,16 @@ function App() {
             >
               AGENT ACTIONS:
             </div>
-            {agentSteps.map((step, index) => (
+            {agentSteps
+              .filter((step, index, arr) => {
+                // Deduplicate: keep only the latest step per file path
+                if (!step.args?.path) return true;
+                const lastIndex = arr.findLastIndex(
+                  (s) => s.args?.path === step.args?.path && s.tool === step.tool,
+                );
+                return lastIndex === index;
+              })
+              .map((step, index) => (
               <div
                 key={index}
                 style={{
