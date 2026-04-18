@@ -34,7 +34,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const BACKEND_URL = 'http://localhost:8000';
-let currentTTSVoice = 'aura-perseus-en';
+let currentTTSVoice = 'Nate';
 let mainWindow: BrowserWindow | null = null;
 
 /** Extract a human-readable error string from a backend JSON response body */
@@ -280,23 +280,19 @@ ipcMain.handle('deepgram-save-and-transcribe', async (_event, audioBuffer: Array
     console.log('Transcription result:', result.transcript);
     console.log('Confidence:', ((result.confidence ?? 0) * 100).toFixed(1) + '%');
 
-    try {
-      await db
-        .collection('users')
-        .doc('userId')
-        .collection('conversations')
-        .doc('conversationId')
-        .collection('messages')
-        .add({
-          role: 'user',
-          userInput: result.transcript,
-          createdAt: firestore.FieldValue.serverTimestamp(),
-        });
-
-      console.log('Saved to database successfully');
-    } catch (error) {
-      console.log('Failed to save in database: ', error);
-    }
+    // Fire-and-forget: don't block transcription return for Firebase save
+    db.collection('users')
+      .doc('userId')
+      .collection('conversations')
+      .doc('conversationId')
+      .collection('messages')
+      .add({
+        role: 'user',
+        userInput: result.transcript,
+        createdAt: firestore.FieldValue.serverTimestamp(),
+      })
+      .then(() => console.log('Saved to database successfully'))
+      .catch((error: any) => console.log('Failed to save in database: ', error));
 
     return {
       success: true,
@@ -522,6 +518,122 @@ ipcMain.handle('chat-send-message', async (_event, message: string) => {
       success: false,
       error: error.message || 'Unknown chat error occurred',
     };
+  }
+});
+
+// Streaming Chat + TTS handler
+ipcMain.handle('chat-send-message-streaming', async (_event, message: string) => {
+  try {
+    console.log('Streaming chat message received:', message);
+
+    // Skip RAG retrieval in streaming path to minimize latency
+    // (RAG context is still used in non-streaming chat-send-message)
+    const augmentedMessage = message;
+
+    // Start SSE stream from backend immediately
+    const response = await fetch(`${BACKEND_URL}/api/v1/groq/chat/stream-tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: augmentedMessage, voice: currentTTSVoice }),
+    });
+
+    if (!response.ok) {
+      const errorMsg = await extractBackendError(response, 'Stream request failed');
+      throw new Error(errorMsg);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+
+    const decoder = new TextDecoder();
+    let fullText = '';
+    let sseBuffer = '';
+    let audioChunkCount = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by double newlines
+      // Process complete events only
+      while (sseBuffer.includes('\n\n')) {
+        const eventEnd = sseBuffer.indexOf('\n\n');
+        const eventBlock = sseBuffer.slice(0, eventEnd);
+        sseBuffer = sseBuffer.slice(eventEnd + 2);
+
+        let eventType = '';
+        let eventData = '';
+
+        for (const line of eventBlock.split('\n')) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            eventData = line.slice(6);
+          }
+        }
+
+        if (!eventType || !eventData) continue;
+
+        try {
+          const parsed = JSON.parse(eventData);
+
+          if (eventType === 'text') {
+            fullText += parsed.text;
+            if (mainWindow) {
+              mainWindow.webContents.send('streaming-text', parsed.text);
+            }
+          } else if (eventType === 'audio') {
+            audioChunkCount++;
+            console.log(`Sending audio chunk #${audioChunkCount} to renderer, base64 length: ${parsed.audio.length}`);
+            if (mainWindow) {
+              mainWindow.webContents.send('streaming-audio', parsed.audio);
+            }
+          } else if (eventType === 'done') {
+            console.log(`Stream complete. Total audio chunks sent: ${audioChunkCount}`);
+            if (mainWindow) {
+              mainWindow.webContents.send('streaming-done');
+            }
+          } else if (eventType === 'error') {
+            console.error('Stream error from backend:', parsed.error);
+          }
+        } catch (parseErr) {
+          console.warn('Failed to parse SSE data:', parseErr);
+        }
+      }
+    }
+
+    // Fire-and-forget: RAG indexing + Firebase save (don't block return)
+    if (isRetrievalReady()) {
+      const convId = 'conversationId';
+      const msgTimestamp = String(Date.now());
+      Promise.all([
+        indexConversationMessage({
+          content: message, userId: 'userId', conversationId: convId,
+          messageId: `user-${msgTimestamp}`, role: 'user',
+        }),
+        indexConversationMessage({
+          content: fullText, userId: 'userId', conversationId: convId,
+          messageId: `aurix-${msgTimestamp}`, role: 'aurix',
+        }),
+      ]).catch((err: any) => console.warn('RAG indexing failed (non-fatal):', err));
+    }
+
+    db.collection('users').doc('userId').collection('conversations')
+      .doc('conversationId').collection('messages')
+      .add({ role: 'aurix', aurixResponse: fullText, createdAt: firestore.FieldValue.serverTimestamp() })
+      .then(() => console.log('Streaming response saved to database'))
+      .catch((err: any) => console.warn('Failed to save streaming response:', err));
+
+    return { success: true, response: fullText };
+  } catch (error: any) {
+    console.error('Streaming chat error:', error);
+    // Notify renderer that stream is done (error case)
+    if (mainWindow) {
+      mainWindow.webContents.send('streaming-done');
+    }
+    return { success: false, error: error.message || 'Unknown streaming error' };
   }
 });
 

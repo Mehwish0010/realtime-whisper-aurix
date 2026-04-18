@@ -2,19 +2,53 @@
 Groq Chat Endpoints — backend-managed conversation history & agent mode
 """
 
+import json
+import base64
+import logging
+import re
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from app.models.schemas import (
     ChatResponse,
     SimpleMessageRequest,
+    StreamTTSRequest,
     SystemPromptRequest,
     AgentRequest,
     AgentToolResultsRequest,
     AgentResponse,
 )
 from app.services.groq_service import GroqService
+from app.services.inworld_tts_service import InWorldTTSService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 groq_service = GroqService()
+inworld_tts = InWorldTTSService()
+
+
+# ── Sentence splitting helper ──────────────────────────────
+
+_SENTENCE_END_RE = re.compile(r'(?<=[.!?;:,])\s')
+
+
+def _split_sentences(buffer: str):
+    """Split buffer into (ready_sentence, remaining_buffer).
+    Splits on punctuation followed by whitespace (. ! ? ; : ,)
+    or forces a split at last space when buffer > 60 chars.
+    Smaller chunks = lower time-to-first-audio."""
+    parts = _SENTENCE_END_RE.split(buffer)
+    if len(parts) > 1:
+        return parts[0].strip(), buffer[len(parts[0]):].lstrip()
+
+    # No punctuation boundary — force split if buffer is long
+    if len(buffer) > 60:
+        last_space = buffer.rfind(" ", 0, 60)
+        if last_space > 10:
+            return buffer[:last_space].strip(), buffer[last_space:].strip()
+
+    return None, buffer
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -27,6 +61,72 @@ async def chat(request: SimpleMessageRequest):
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/stream-tts")
+async def chat_stream_tts(request: StreamTTSRequest):
+    """
+    Stream LLM tokens via SSE. Accumulates sentences and sends InWorld TTS
+    audio for each chunk. Emits:
+      event: text   — partial token for live text display
+      event: audio  — base64-encoded audio chunk
+      event: done   — end of stream
+    """
+    def _tts_sync(text: str, voice: str) -> bytes:
+        """Run async InWorld TTS in a sync context."""
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                inworld_tts.text_to_speech(text=text, voice=voice)
+            )
+        finally:
+            loop.close()
+
+    def generate():
+        sentence_buffer = ""
+        voice = request.voice
+
+        try:
+            for token in groq_service.send_message_stream(request.message):
+                yield f"event: text\ndata: {json.dumps({'text': token})}\n\n"
+
+                sentence_buffer += token
+
+                ready, sentence_buffer = _split_sentences(sentence_buffer)
+                if ready:
+                    try:
+                        audio_bytes = _tts_sync(ready, voice)
+                        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                        yield f"event: audio\ndata: {json.dumps({'audio': audio_b64})}\n\n"
+                    except Exception as tts_err:
+                        logger.error("InWorld TTS error for chunk: %s", tts_err)
+
+            # Flush remaining buffer
+            remaining = sentence_buffer.strip()
+            if remaining:
+                try:
+                    audio_bytes = _tts_sync(remaining, voice)
+                    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                    yield f"event: audio\ndata: {json.dumps({'audio': audio_b64})}\n\n"
+                except Exception as tts_err:
+                    logger.error("InWorld TTS error for final chunk: %s", tts_err)
+
+        except Exception as e:
+            logger.error("Stream error: %s", e)
+            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/chat/agent", response_model=AgentResponse)

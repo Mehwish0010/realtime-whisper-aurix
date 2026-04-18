@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # OpenRouter Configuration (for Agent mode)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
+    # InWorld TTS Configuration
+    INWORLD_API_KEY: str = os.getenv("INWORLD_API_KEY", "")
+
     # Cohere Configuration (for embeddings)
     COHERE_API_KEY: str = os.getenv("COHERE_API_KEY", "")
 

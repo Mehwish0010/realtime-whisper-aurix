@@ -42,6 +42,14 @@ function App() {
   const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(true);
 
+  // Sequential audio playback queue using Audio elements
+  const audioQueueRef = useRef<string[]>([]);  // base64 chunks waiting to play
+  const isPlayingRef = useRef(false);
+  const activeSourcesRef = useRef(0);       // compat: used by wait logic
+  const streamDoneRef = useRef(false);
+  const streamingTextRef = useRef('');
+  const [streamingAIText, setStreamingAIText] = useState('');
+
   // Agent mode state
   const [agentMode, setAgentMode] = useState(false);
   const [vscodeConnected, setVscodeConnected] = useState(false);
@@ -49,28 +57,115 @@ function App() {
     Array<{ tool: string; args: any; result: any; timestamp: number }>
   >([]);
 
+  // Play next audio chunk from queue using HTML Audio element
+  const playNextChunk = () => {
+    if (isPlayingRef.current || audioQueueRef.current.length === 0) {
+      if (audioQueueRef.current.length === 0 && !isPlayingRef.current && streamDoneRef.current) {
+        activeSourcesRef.current = 0;
+        setConversationState('idle');
+      }
+      return;
+    }
+
+    isPlayingRef.current = true;
+    activeSourcesRef.current = audioQueueRef.current.length + 1;
+    const base64Audio = audioQueueRef.current.shift()!;
+
+    try {
+      // Create blob URL from base64 and play with Audio element
+      const binaryStr = atob(base64Audio);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: 'audio/mpeg' });
+      const url = URL.createObjectURL(blob);
+
+      const audio = new Audio(url);
+      setConversationState('ai_speaking');
+
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        isPlayingRef.current = false;
+        activeSourcesRef.current = Math.max(0, activeSourcesRef.current - 1);
+        console.log('Chunk ended, remaining:', audioQueueRef.current.length);
+        playNextChunk();
+      };
+
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        URL.revokeObjectURL(url);
+        isPlayingRef.current = false;
+        activeSourcesRef.current = Math.max(0, activeSourcesRef.current - 1);
+        playNextChunk();
+      };
+
+      audio.play().catch((err) => {
+        console.error('Audio play() failed:', err);
+        isPlayingRef.current = false;
+        playNextChunk();
+      });
+    } catch (err) {
+      console.error('Audio decode error:', err);
+      isPlayingRef.current = false;
+      playNextChunk();
+    }
+  };
+
+  // Reset audio pipeline for new conversation turn
+  const resetAudioPipeline = () => {
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
+    activeSourcesRef.current = 0;
+    streamDoneRef.current = false;
+  };
+
   // Check Deepgram status on mount
   useEffect(() => {
     checkDeepgramStatus();
     listMicrophones();
 
-    // Load voices for Web Speech API
+    // Load voices for Web Speech API (fallback)
     if (window.speechSynthesis) {
       window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = () => {
-        const voices = window.speechSynthesis.getVoices();
-        console.log('� Available TTS voices:', voices.length);
-      };
     }
 
-    // Listen for agent steps
     const electronAPI = (window as any).electronAPI;
+
+    // Listen for agent steps
     if (electronAPI?.onAgentStep) {
       electronAPI.onAgentStep(
         (step: { tool: string; args: any; result: any; timestamp: number }) => {
           setAgentSteps((prev) => [...prev, step]);
         },
       );
+    }
+
+    // Listen for streaming events
+    if (electronAPI?.onStreamingText) {
+      electronAPI.onStreamingText((text: string) => {
+        streamingTextRef.current += text;
+        setStreamingAIText(streamingTextRef.current);
+      });
+    }
+
+    if (electronAPI?.onStreamingAudio) {
+      electronAPI.onStreamingAudio((audioBase64: string) => {
+        console.log('Audio chunk received, base64 len:', audioBase64.length);
+        audioQueueRef.current.push(audioBase64);
+        playNextChunk();
+      });
+    }
+
+    if (electronAPI?.onStreamingDone) {
+      electronAPI.onStreamingDone(() => {
+        console.log('Streaming done');
+        streamDoneRef.current = true;
+        // If nothing is scheduled/playing, go idle now
+        if (activeSourcesRef.current <= 0) {
+          setConversationState('idle');
+        }
+      });
     }
   }, []);
 
@@ -292,6 +387,11 @@ function App() {
       // Stop any ongoing speech
       stopSpeaking();
 
+      // Clear streaming audio pipeline
+      resetAudioPipeline();
+      streamingTextRef.current = '';
+      setStreamingAIText('');
+
       // Stop any ongoing recording
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
@@ -309,271 +409,140 @@ function App() {
     }
   };
 
+  // ── 5-Second Recording with Streaming TTS ───────────────
+  // Records for 5 seconds, batch transcribes with Deepgram, then
+  // immediately fires streaming LLM+TTS with gapless audio playback.
+
   const startManualRecording = async () => {
     try {
-      console.log('Starting 5-second recording with optimized approach...');
+      console.log('Starting 5-second recording...');
       setConversationState('listening');
-      setStatus('Recording for 5 seconds - Speak now!');
+      setStatus('Recording... speak now! (5 sec)');
 
-      // Request microphone access with specific constraints
       const constraints: MediaStreamConstraints = {
         audio: selectedMicId
-          ? {
-              deviceId: { exact: selectedMicId },
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: true,
-              sampleRate: 48000,
-            }
-          : {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: true,
-              sampleRate: 48000,
-            },
+          ? { deviceId: { exact: selectedMicId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          : { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       };
-
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
 
-      // Log audio track info for debugging
-      const audioTrack = stream.getAudioTracks()[0];
-      console.log(' Microphone stream obtained');
-      console.log(' Audio track settings:', audioTrack.getSettings());
-      console.log(' Audio track label:', audioTrack.label);
-      console.log(' Audio track enabled:', audioTrack.enabled);
-      console.log(' Audio track muted:', audioTrack.muted);
-      console.log(' Audio track ready state:', audioTrack.readyState);
-
-      // Check if the track is actually active
-      if (audioTrack.readyState !== 'live') {
-        throw new Error(' Microphone track is not live. Please check your microphone connection.');
-      }
-
-      if (audioTrack.muted) {
-        console.warn(' WARNING: Microphone track is muted!');
-      }
-
-      // Set up audio visualization to monitor levels
-      if (!audioContextRef.current) {
+      // Audio level visualization
+      if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
         audioContextRef.current = new AudioContext();
       }
-
-      // Resume audio context if suspended (required by browser security)
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume();
-        console.log(' Audio context resumed');
-      }
-
-      console.log(' Audio context state:', audioContextRef.current.state);
-
+      if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
       analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 2048;
-      analyserRef.current.smoothingTimeConstant = 0.3;
-
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      source.connect(analyserRef.current);
-      console.log(' Audio source connected to analyser');
-
-      const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount);
-      const timeDomainData = new Uint8Array(analyserRef.current.fftSize);
-
-      // Monitor audio level during recording
-      let levelInterval: ReturnType<typeof setInterval> | null = null;
-      let maxAudioLevel = 0;
-      const checkAudioLevel = () => {
+      analyserRef.current.fftSize = 512;
+      const micSource = audioContextRef.current.createMediaStreamSource(stream);
+      micSource.connect(analyserRef.current);
+      const freqData = new Uint8Array(analyserRef.current.frequencyBinCount);
+      const levelInterval = setInterval(() => {
         if (analyserRef.current) {
-          // Check both frequency and time domain data
-          analyserRef.current.getByteFrequencyData(frequencyData);
-          analyserRef.current.getByteTimeDomainData(timeDomainData);
-
-          const frequencyAvg = frequencyData.reduce((a, b) => a + b) / frequencyData.length;
-
-          // Calculate RMS (Root Mean Square) from time domain for better accuracy
-          let sum = 0;
-          for (let i = 0; i < timeDomainData.length; i++) {
-            const normalized = (timeDomainData[i] - 128) / 128;
-            sum += normalized * normalized;
-          }
-          const rms = Math.sqrt(sum / timeDomainData.length);
-          const rmsLevel = Math.round(rms * 100);
-
-          const roundedLevel = Math.max(Math.round(frequencyAvg), rmsLevel);
-          setAudioLevel(roundedLevel);
-          if (roundedLevel > maxAudioLevel) {
-            maxAudioLevel = roundedLevel;
-          }
-          console.log(
-            '� Audio level:',
-            roundedLevel,
-            '(freq:',
-            Math.round(frequencyAvg),
-            'rms:',
-            rmsLevel + ') | Max:',
-            maxAudioLevel,
-          );
+          analyserRef.current.getByteFrequencyData(freqData);
+          setAudioLevel(Math.round(freqData.reduce((a, b) => a + b) / freqData.length));
         }
-      };
+      }, 100);
 
-      levelInterval = setInterval(checkAudioLevel, 100);
-      console.log('Audio monitoring started - Speak now!');
+      // Record
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
-      // Wait 500ms before starting recording
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      console.log('Audio monitoring active, max level so far:', maxAudioLevel);
-
-      // Create MediaRecorder with specific options
-      const options = { mimeType: 'audio/webm;codecs=opus' };
-      const mediaRecorder = new MediaRecorder(stream, options);
-      const audioChunks: Blob[] = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        console.log('Data available, size:', event.data.size);
-        if (event.data.size > 0) {
-          audioChunks.push(event.data);
+      recorder.onstop = async () => {
+        clearInterval(levelInterval);
+        setAudioLevel(0);
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
         }
-      };
 
-      mediaRecorder.onstop = async () => {
-        console.log('Recording stopped, processing...');
-        console.log('Total chunks collected:', audioChunks.length);
         setConversationState('transcribing');
-        setStatus('Processing speech...');
+        setStatus('Transcribing...');
 
         try {
-          // Create audio blob
-          const audioBlob = new Blob(audioChunks, {
-            type: 'audio/webm;codecs=opus',
-          });
+          const audioBlob = new Blob(chunks, { type: 'audio/webm;codecs=opus' });
           const audioBuffer = await audioBlob.arrayBuffer();
-
-          console.log('Audio recorded, size:', audioBuffer.byteLength, 'bytes');
-          console.log('Audio blob size:', audioBlob.size, 'bytes');
-          console.log('Max audio level during recording:', maxAudioLevel);
-
-          if (maxAudioLevel === 0) {
-            console.warn(
-              ' Warning: Audio level was 0 during recording. Microphone may be muted in Windows.',
-            );
-            console.warn(
-              ' If transcription is incorrect, check Windows Sound Settings > Input volume',
-            );
-          }
-
           const electronAPI = (window as any).electronAPI;
 
-          // Step 1: Transcribe with Deepgram
-          setStatus('Transcribing speech with Deepgram...');
-          const transcriptResult = await electronAPI.deepgramSaveAndTranscribe(audioBuffer);
-          if (!transcriptResult.success || !transcriptResult.text) {
-            const errorMsg = transcriptResult.error || 'Transcription failed';
-            throw new Error(errorMsg);
+          // Batch transcription
+          const result = await electronAPI.deepgramSaveAndTranscribe(audioBuffer);
+          if (!result.success || !result.text?.trim()) {
+            console.log('No speech detected, returning to idle');
+            setConversationState('idle');
+            setStatus('No speech detected — tap mic and try again');
+            return;
           }
 
-          const userText = transcriptResult.text.trim();
-          const confidence = transcriptResult.confidence || 0;
-          console.log('� Transcription received:', userText);
-          console.log('� Confidence:', (confidence * 100).toFixed(1) + '%');
-          console.log('� Transcription length:', userText.length, 'characters');
-
-          if (!userText || userText.length < 2) {
-            console.warn(' Warning: Transcription is very short or empty');
-          }
+          const userText = result.text.trim();
+          console.log('Transcription:', userText, '| Confidence:', ((result.confidence || 0) * 100).toFixed(1) + '%');
 
           setConversationHistory((prev) => [
             ...prev,
             { type: 'user', text: userText, timestamp: Date.now() },
           ]);
 
-          // Step 2: Get AI response (agent mode or regular chat)
-          let aiResponse: string;
-
+          // Immediately fire streaming LLM + TTS
           if (agentMode) {
             setConversationState('ai_thinking');
-            setStatus('Agent is working in VS Code...');
-
-            // Auto-reconnect if disconnected
+            setStatus('Agent working...');
             const statusCheck = await electronAPI.vscodeStatus();
             if (!statusCheck.connected) {
-              setStatus('Reconnecting to VS Code...');
               const reconnect = await electronAPI.vscodeConnect();
-              if (!reconnect.success) {
-                throw new Error(
-                  'VS Code not connected. Open VS Code with Aurix extension and try again.',
-                );
-              }
+              if (!reconnect.success) throw new Error('VS Code not connected');
               setVscodeConnected(true);
             }
-
             const agentResult = await electronAPI.agentExecuteTask(userText);
-            if (!agentResult.success || !agentResult.response) {
-              throw new Error(agentResult.error || 'Agent execution failed');
-            }
-            aiResponse = agentResult.response;
-            console.log('� Agent response:', aiResponse, 'Steps:', agentResult.steps?.length || 0);
+            if (!agentResult.success) throw new Error(agentResult.error || 'Agent failed');
+            const aiText = agentResult.response || 'Done.';
+            setConversationHistory((prev) => [...prev, { type: 'ai', text: aiText, timestamp: Date.now() }]);
+            if (ttsEnabled) await speakText(aiText);
           } else {
             setConversationState('ai_thinking');
-            setStatus('AI is thinking (Groq LLaMA 3.3)...');
-            const chatResult = await electronAPI.chatSendMessage(userText);
-            if (!chatResult.success || !chatResult.response) {
-              throw new Error(chatResult.error || 'Failed to get AI response');
+            setStatus('AI responding...');
+            streamingTextRef.current = '';
+            setStreamingAIText('');
+            resetAudioPipeline();
+
+            const chatResult = await electronAPI.chatSendMessageStreaming(userText);
+            if (!chatResult.success) throw new Error(chatResult.error || 'Chat failed');
+
+            const aiResponse = chatResult.response || streamingTextRef.current;
+            setConversationHistory((prev) => [...prev, { type: 'ai', text: aiResponse, timestamp: Date.now() }]);
+            setStreamingAIText('');
+            streamingTextRef.current = '';
+
+            // Wait for gapless audio to finish
+            if (ttsEnabled) {
+              await new Promise<void>((resolve) => {
+                const check = () => {
+                  if (activeSourcesRef.current <= 0 && streamDoneRef.current) resolve();
+                  else setTimeout(check, 150);
+                };
+                check();
+              });
             }
-            aiResponse = chatResult.response;
-            console.log('� AI response:', aiResponse);
-          }
-          setConversationHistory((prev) => [
-            ...prev,
-            { type: 'ai', text: aiResponse, timestamp: Date.now() },
-          ]);
-
-          // Step 3: Speak the AI response
-          if (ttsEnabled) {
-            setStatus('AI is speaking...');
-            await speakText(aiResponse);
           }
 
-          // Done
           setConversationState('idle');
-          setStatus('Ready - Click microphone to speak again');
-          console.log('Turn complete');
-        } catch (error: any) {
-          console.error('Processing error:', error);
-          setStatus(`Error: ${error.message}`);
+          setStatus('Ready - Click mic to speak');
+        } catch (err: any) {
+          console.error('Processing error:', err);
+          setStatus(`Error: ${err.message}`);
           setConversationState('idle');
-        } finally {
-          // Clean up interval
-          if (levelInterval) {
-            clearInterval(levelInterval);
-            console.log('� Audio monitoring stopped');
-          }
-          // Clean up stream
-          if (streamRef.current) {
-            streamRef.current.getTracks().forEach((track) => track.stop());
-            streamRef.current = null;
-          }
-          setAudioLevel(0);
         }
       };
 
-      // Start recording with timeslice to collect data chunks
-      mediaRecorder.start(100); // Collect data every 100ms
+      recorder.start(100);
       setIsRecording(true);
-      console.log('Recording started with state:', mediaRecorder.state);
 
       // Stop after 5 seconds
       setTimeout(() => {
-        console.log('Timeout reached, stopping recording. State:', mediaRecorder.state);
-        if (levelInterval) {
-          clearInterval(levelInterval);
-          console.log('� Audio monitoring stopped (timeout)');
-        }
-        if (mediaRecorder.state === 'recording') {
-          mediaRecorder.stop();
+        if (recorder.state === 'recording') {
+          recorder.stop();
           setIsRecording(false);
         }
       }, 5000);
-
-      console.log('Recording initiated');
     } catch (error: any) {
       console.error('Recording error:', error);
       setStatus(`Error: ${error.message}`);
@@ -771,9 +740,10 @@ function App() {
             conversationState === 'idle' &&
             '� Click to record'}
           {conversationState === 'listening' && '� Recording... (5 seconds)'}
-          {conversationState === 'transcribing' && '� Processing with Deepgram...'}
+          {conversationState === 'transcribing' && '� Processing...'}
           {conversationState === 'ai_thinking' && '� Groq AI thinking...'}
           {conversationState === 'ai_speaking' && '� AI speaking...'}
+          {conversationState === 'tts_generating' && '� Generating speech...'}
         </div>
 
         {/* Main Button */}
@@ -916,11 +886,12 @@ function App() {
               );
             })()}
 
-            {/* AI Output */}
+            {/* AI Output — show streaming text live, or last completed AI message */}
             {(() => {
               const lastAIMsg = [...conversationHistory].reverse().find((msg) => msg.type === 'ai');
+              const displayText = streamingAIText || (lastAIMsg ? lastAIMsg.text : null);
               return (
-                lastAIMsg && (
+                displayText && (
                   <div>
                     <div
                       style={{
@@ -930,7 +901,7 @@ function App() {
                         fontWeight: '600',
                       }}
                     >
-                      AI RESPONSE:
+                      AI RESPONSE:{streamingAIText ? ' (streaming...)' : ''}
                     </div>
                     <div
                       style={{
@@ -942,7 +913,7 @@ function App() {
                         lineHeight: '1.6',
                       }}
                     >
-                      {lastAIMsg.text}
+                      {displayText}
                     </div>
                   </div>
                 )

@@ -60,9 +60,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Chat methods
   chatSendMessage: (message: string) => ipcRenderer.invoke('chat-send-message', message),
+  chatSendMessageStreaming: (message: string) =>
+    ipcRenderer.invoke('chat-send-message-streaming', message),
   chatClearHistory: () => ipcRenderer.invoke('chat-clear-history'),
   chatGetHistory: () => ipcRenderer.invoke('chat-get-history'),
   chatSetSystemPrompt: (prompt: string) => ipcRenderer.invoke('chat-set-system-prompt', prompt),
+
+  // Streaming event listeners
+  onStreamingText: (callback: (text: string) => void) => {
+    ipcRenderer.removeAllListeners('streaming-text');
+    ipcRenderer.on('streaming-text', (_event: any, text: string) => callback(text));
+  },
+  onStreamingAudio: (callback: (audioBase64: string) => void) => {
+    ipcRenderer.removeAllListeners('streaming-audio');
+    ipcRenderer.on('streaming-audio', (_event: any, audioBase64: string) =>
+      callback(audioBase64),
+    );
+  },
+  onStreamingDone: (callback: () => void) => {
+    ipcRenderer.removeAllListeners('streaming-done');
+    ipcRenderer.on('streaming-done', () => callback());
+  },
 
   // Retrieval methods
   retrievalSearch: (query: string, userId?: string, limit?: number) =>
@@ -109,6 +127,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Deepgram event listeners
   onDeepgramTranscript: (callback: (data: any) => void) => {
+    ipcRenderer.removeAllListeners('deepgram-transcript');
     ipcRenderer.on('deepgram-transcript', (_event: any, data: any) => callback(data));
   },
   onDeepgramSpeechStarted: (callback: () => void) => {

@@ -57,6 +57,12 @@ class SimpleMessageRequest(BaseModel):
     message: str
 
 
+class StreamTTSRequest(BaseModel):
+    """Request model for streaming chat + InWorld TTS"""
+    message: str
+    voice: str = "Nate"
+
+
 class SystemPromptRequest(BaseModel):
     """Request model for setting system prompt"""
     prompt: str

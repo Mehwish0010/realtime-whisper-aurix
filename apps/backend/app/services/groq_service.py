@@ -13,7 +13,9 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful voice assistant. Provide clear, concise, and friendly responses."
+    "You are a voice assistant. STRICT RULE: Reply in 1-2 sentences ONLY. "
+    "Never exceed 30 words. No lists, no bullet points, no elaboration. "
+    "Be casual and direct like a quick chat with a friend."
 )
 
 AGENT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
@@ -25,9 +27,9 @@ class GroqService:
 
     def __init__(self):
         self.client = Groq(api_key=settings.GROQ_API_KEY)
-        self.model = "llama-3.3-70b-versatile"
+        self.model = "llama-3.1-8b-instant"
         self.temperature = 0.7
-        self.max_tokens = 1000
+        self.max_tokens = 80
         self.max_history_length = 20
 
         # OpenRouter client for agent mode (Nemotron 3)
@@ -111,6 +113,54 @@ class GroqService:
                 raise Exception(f"Invalid request: {str(e)}")
 
             raise Exception(f"Chat error: {str(e)}")
+
+    def send_message_stream(self, user_message: str):
+        """Stream tokens from Groq. Yields token strings as they arrive.
+        After the stream ends, the full response is added to conversation history."""
+        logger.info("User message (stream): %s", user_message)
+
+        self.conversation_history.append({"role": "user", "content": user_message})
+        self._trim_history()
+
+        messages = [
+            {"role": m["role"], "content": m["content"]}
+            for m in self.conversation_history
+        ]
+
+        try:
+            stream = self.client.chat.completions.create(
+                messages=messages,
+                model=self.model,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                stream=True,
+            )
+
+            full_response = ""
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    full_response += delta.content
+                    yield delta.content
+
+            if not full_response:
+                full_response = "I apologize, but I could not generate a response."
+
+            self.conversation_history.append(
+                {"role": "assistant", "content": full_response}
+            )
+            logger.info("Streaming response complete, length: %d", len(full_response))
+
+        except Exception as e:
+            if "context_length_exceeded" in str(e):
+                logger.warning("Context length exceeded during stream, clearing history")
+                self.clear_history()
+                self.conversation_history.append({"role": "user", "content": user_message})
+                self._trim_history()
+                yield from self.send_message_stream(user_message)
+                return
+
+            raise Exception(f"Chat stream error: {str(e)}")
 
     # ── Agent mode ──────────────────────────────────────────
 
