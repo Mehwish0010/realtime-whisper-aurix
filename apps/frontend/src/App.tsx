@@ -945,12 +945,16 @@ function App() {
               AGENT ACTIONS:
             </div>
             {agentSteps
-              .filter((step, index, arr) => {
+              .filter((step: { tool: string; args: any; result: any; timestamp: number }, index: number, arr: { tool: string; args: any; result: any; timestamp: number }[]) => {
                 // Deduplicate: keep only the latest step per file path
                 if (!step.args?.path) return true;
-                const lastIndex = arr.findLastIndex(
-                  (s) => s.args?.path === step.args?.path && s.tool === step.tool,
-                );
+                let lastIndex = -1;
+                for (let i = arr.length - 1; i >= 0; i--) {
+                  if (arr[i].args?.path === step.args?.path && arr[i].tool === step.tool) {
+                    lastIndex = i;
+                    break;
+                  }
+                }
                 return lastIndex === index;
               })
               .map((step, index) => (

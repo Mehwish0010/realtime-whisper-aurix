@@ -23,7 +23,7 @@ import {
   buildContextPrompt,
 } from './retrieval-service.js';
 import { getVSCodeBridge } from './vscode-bridge.js';
-import { AGENT_TOOLS, AGENT_SYSTEM_PROMPT, AGENT_MODEL } from './agent-tools.js';
+import { AGENT_TOOLS, AGENT_SYSTEM_PROMPT } from './agent-tools.js';
 
 const { firestore } = firebaseAdmin;
 
@@ -40,7 +40,7 @@ let mainWindow: BrowserWindow | null = null;
 /** Extract a human-readable error string from a backend JSON response body */
 async function extractBackendError(response: Response, fallback: string): Promise<string> {
   try {
-    const body = await response.json();
+    const body = await response.json() as Record<string, unknown>;
     if (typeof body?.detail === 'string') return body.detail;
     if (body?.detail) return JSON.stringify(body.detail);
     return fallback;
@@ -692,16 +692,16 @@ ipcMain.handle('chat-set-system-prompt', async (_event, prompt: string) => {
   }
 });
 
-// TTS IPC Handlers (using Deepgram Aura)
+// TTS IPC Handlers (using InWorld TTS)
 
 ipcMain.handle('tts-synthesize', async (_event, text: string) => {
   try {
-    console.log('TTS request:', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
+    console.log('TTS request (InWorld):', text.substring(0, 50) + (text.length > 50 ? '...' : ''));
 
-    const response = await fetch(`${BACKEND_URL}/api/v1/deepgram/tts`, {
+    const response = await fetch(`${BACKEND_URL}/api/v1/groq/chat/stream-tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: currentTTSVoice }),
+      body: JSON.stringify({ message: text, voice: currentTTSVoice }),
     });
 
     if (!response.ok) {
@@ -976,4 +976,4 @@ ipcMain.handle('agent-execute-task', async (_event, message: string) => {
   }
 });
 
-console.log('AURIX Voice Assistant - Deepgram STT + TTS + Groq Chat Integration Ready');
+console.log('AURIX Voice Assistant - Deepgram STT + InWorld TTS + Groq Chat Integration Ready');

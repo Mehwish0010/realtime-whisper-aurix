@@ -21,14 +21,6 @@ class TranscriptionResponse(BaseModel):
     words: Optional[List[Dict[str, Any]]] = None
 
 
-# Deepgram TTS Models
-class TTSRequest(BaseModel):
-    """Request model for text-to-speech"""
-    text: str
-    voice: str = "aura-asteria-en"
-    model: str = "aura-asteria-en"
-
-
 # Groq Chat Models
 class ChatMessage(BaseModel):
     """Single chat message"""
