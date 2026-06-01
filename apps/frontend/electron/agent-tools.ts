@@ -1,3 +1,7 @@
+import os from 'os';
+
+const USER_DESKTOP = os.homedir().replace(/\\/g, '/') + '/Desktop';
+
 export const AGENT_TOOLS = [
   {
     type: 'function' as const,
@@ -129,7 +133,7 @@ IMPORTANT: The user speaks via voice. Their message may have transcription error
 - "make a to-do app" might come as "make a to do app"
 - Always guess the most logical coding intent from the message.
 
-Default working directory: C:/Users/Dell/Desktop
+Default working directory: ${USER_DESKTOP}
 
 CODING RULES:
 - Write CLEAN, CORRECT, WORKING code. No placeholder code, no pseudo-code.
@@ -139,8 +143,8 @@ CODING RULES:
 - Test your logic mentally before writing — do NOT hallucinate functions or APIs that dont exist.
 
 FILE RULES:
-- ALWAYS use absolute paths with forward slashes (e.g. C:/Users/Dell/Desktop/app.py).
-- Default directory: C:/Users/Dell/Desktop/
+- ALWAYS use absolute paths with forward slashes (e.g. ${USER_DESKTOP}/app.py).
+- Default directory: ${USER_DESKTOP}/
 - When editing, ALWAYS read the file first, then make precise edits.
 - In file content, use single quotes instead of double quotes to avoid JSON escaping issues.
 
