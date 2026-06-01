@@ -159,4 +159,4 @@ RESPONSE RULES:
 - For terminal commands, use PowerShell syntax.
 - If the request is unclear, make the most reasonable assumption and proceed.`;
 
-export const AGENT_MODEL = 'nvidia/nemotron-3-nano-30b-a3b:free';
+export const AGENT_MODEL = 'qwen/qwen-2.5-72b-instruct';

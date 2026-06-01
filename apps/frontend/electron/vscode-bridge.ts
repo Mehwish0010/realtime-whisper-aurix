@@ -82,8 +82,8 @@ class VSCodeBridge {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(id);
-        reject(new Error(`Command ${action} timed out after 30s`));
-      }, 30000);
+        reject(new Error(`Command ${action} timed out after 60s`));
+      }, 60000);
 
       this.pendingRequests.set(id, { resolve, reject, timeout });
       this.ws!.send(JSON.stringify({ id, action, params }));

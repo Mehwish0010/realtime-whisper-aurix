@@ -1,9 +1,4 @@
 import * as vscode from "vscode";
-import { animateTyping } from "../utils/typing-animator";
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export async function handleEditFile(params: {
   path: string;
@@ -24,42 +19,24 @@ export async function handleEditFile(params: {
   );
 
   if (params.operation === "insert") {
-    // Move cursor to position, then animate typing
-    editor.selection = new vscode.Selection(startPos, startPos);
-    editor.revealRange(new vscode.Range(startPos, startPos));
-    await delay(200);
-    await animateTyping(editor, params.content || "");
+    await editor.edit((editBuilder) => {
+      editBuilder.insert(startPos, params.content || "");
+    });
   } else if (params.operation === "replace") {
     const endPos = new vscode.Position(
       (params.endLine || params.line) - 1,
       (params.endColumn || 999) - 1,
     );
     const range = new vscode.Range(startPos, endPos);
-
-    // Visually select the range first
-    editor.selection = new vscode.Selection(startPos, endPos);
-    editor.revealRange(range);
-    await delay(300);
-
-    // Delete the selection
     await editor.edit((editBuilder) => {
-      editBuilder.delete(range);
+      editBuilder.replace(range, params.content || "");
     });
-    await delay(200);
-
-    // Type the new content
-    await animateTyping(editor, params.content || "");
   } else if (params.operation === "delete") {
     const endPos = new vscode.Position(
       (params.endLine || params.line) - 1,
       (params.endColumn || 999) - 1,
     );
     const range = new vscode.Range(startPos, endPos);
-
-    // Visually select then delete
-    editor.selection = new vscode.Selection(startPos, endPos);
-    editor.revealRange(range);
-    await delay(300);
     await editor.edit((editBuilder) => {
       editBuilder.delete(range);
     });

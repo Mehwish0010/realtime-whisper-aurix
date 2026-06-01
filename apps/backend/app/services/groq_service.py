@@ -11,7 +11,7 @@ from app.services.langgraph_chat import LangGraphChatManager
 
 logger = logging.getLogger(__name__)
 
-AGENT_MODEL = "nvidia/nemotron-3-nano-30b-a3b:free"
+AGENT_MODEL = "qwen/qwen-2.5-72b-instruct"
 
 
 class GroqService:
@@ -116,7 +116,7 @@ class GroqService:
                     tools=tools,
                     tool_choice="auto",
                     temperature=0.3,
-                    max_tokens=80,
+                    max_tokens=4096,
                 )
             except Exception as err:
                 err_msg = str(err)
@@ -126,7 +126,7 @@ class GroqService:
                         model=self.agent_model,
                         messages=messages,
                         temperature=0.3,
-                        max_tokens=80,
+                        max_tokens=4096,
                     )
                     fallback_response = (
                         fallback.choices[0].message.content

@@ -7,18 +7,12 @@ export async function handleCreateFile(params: {
 }): Promise<{ path: string; size: number }> {
   const uri = vscode.Uri.file(params.path);
 
-  // Create empty file first so we can animate typing into it
-  await vscode.workspace.fs.writeFile(uri, Buffer.from(""));
+  // Write full content immediately so the file is complete on disk
+  await vscode.workspace.fs.writeFile(uri, Buffer.from(params.content, "utf-8"));
 
   // Open and show the document
   const doc = await vscode.workspace.openTextDocument(uri);
-  const editor = await vscode.window.showTextDocument(doc, { preview: false });
-
-  // Animate typing the content
-  await animateTyping(editor, params.content);
-
-  // Save
-  await doc.save();
+  await vscode.window.showTextDocument(doc, { preview: false });
 
   return { path: params.path, size: params.content.length };
 }
