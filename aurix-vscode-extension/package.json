@@ -1,0 +1,38 @@
+{
+  "name": "aurix-vscode-agent",
+  "displayName": "Aurix VS Code Agent",
+  "description": "AI agent that visually creates, edits, and manages files in VS Code via voice commands from Aurix",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aurix.startServer",
+        "title": "Aurix: Start Agent Server"
+      },
+      {
+        "command": "aurix.stopServer",
+        "title": "Aurix: Stop Agent Server"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  }
+}
