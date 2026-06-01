@@ -17,7 +17,16 @@ async def transcribe_audio(file: UploadFile = File(...)):
     """
     try:
         audio_data = await file.read()
-        result = await deepgram_service.transcribe(audio_data)
+        mimetype = file.content_type or "audio/webm"
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Received audio: {len(audio_data)} bytes, content_type={file.content_type}, filename={file.filename}")
+        # Save for debugging
+        with open("debug_audio.webm", "wb") as f:
+            f.write(audio_data)
+        logger.info("Saved debug audio to debug_audio.webm")
+        result = await deepgram_service.transcribe(audio_data, mimetype=mimetype)
+        logger.info(f"Transcription result: '{result.get('transcript', '')}' confidence={result.get('confidence', 0)}")
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -12,8 +12,12 @@ class DeepgramService:
     def __init__(self):
         self.client = DeepgramClient(api_key=settings.DEEPGRAM_API_KEY)
 
-    async def transcribe(self, audio_data: bytes) -> dict:
+    async def transcribe(self, audio_data: bytes, mimetype: str = "audio/webm") -> dict:
         try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Transcribing audio: {len(audio_data)} bytes, mimetype={mimetype}")
+
             options = PrerecordedOptions(
                 model="nova-2",
                 smart_format=True,
@@ -22,6 +26,7 @@ class DeepgramService:
 
             payload = {"buffer": audio_data}
             response = self.client.listen.rest.v("1").transcribe_file(payload, options)
+            logger.info(f"Deepgram raw response: {response.to_dict()}")
 
             result = response.results
             transcript = result.channels[0].alternatives[0].transcript
